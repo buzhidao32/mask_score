@@ -13,47 +13,13 @@
   </head>
   <body>
     <main class="page">
-      <section class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Mask Score Lookup</p>
-          <h1>把面具名、称号和拼音都变成一条直达查询。</h1>
-          <p class="intro">
-            输入时即时出结果，不必回车。支持面具名字、图鉴称号、全拼、首字母，
-            也支持直接粘贴 <code>["achievement"]=[[广寒上仙]]</code> 这类原始文本。
-          </p>
-        </div>
-
-        <div class="hero-stats" aria-label="站点统计">
-          <article class="stat-card">
-            <p class="stat-label">面具</p>
-            <p id="mask-total" class="stat-value">--</p>
-            <p class="stat-note">当前版本全量索引</p>
-          </article>
-          <article class="stat-card">
-            <p class="stat-label">称号</p>
-            <p id="achievement-total" class="stat-value">--</p>
-            <p class="stat-note">单面具与组合图鉴</p>
-          </article>
-          <article class="stat-card">
-            <p class="stat-label">检索方式</p>
-            <p class="stat-value stat-value-small">中文 / 拼音</p>
-            <p class="stat-note">全拼、首字母、实时匹配</p>
-          </article>
-        </div>
+      <section class="masthead">
+        <h1>面具分查询</h1>
+        <p class="intro">输入面具名字、称号或拼音，结果会实时显示。</p>
       </section>
 
-      <section class="search-panel" aria-label="查询区域">
-        <div class="panel-head">
-          <div>
-            <p class="section-kicker">实时查询</p>
-            <label class="field-label" for="query-input">
-              输入面具名字、称号或拼音
-            </label>
-          </div>
-          <p class="search-note">
-            适合查“嫦娥”“广寒上仙”“guanghanshangxian”“ghsx”“niulang”。
-          </p>
-        </div>
+      <section class="search-area" aria-label="查询区域">
+        <label class="sr-only" for="query-input">输入内容</label>
 
         <form id="search-form" class="search-form">
           <div class="input-shell">
@@ -87,7 +53,6 @@
         </form>
 
         <div class="quick-row">
-          <span class="quick-label">快速试试</span>
           <div class="quick-chips">
             <button class="quick-chip" type="button" data-query="嫦娥">嫦娥</button>
             <button class="quick-chip" type="button" data-query="广寒上仙">广寒上仙</button>
@@ -98,10 +63,6 @@
         </div>
 
         <div id="suggestions" class="suggestions" hidden></div>
-
-        <p id="helper-text" class="helper-text">
-          搜索时会同时检查中文原文、全拼和首字母。输入内容会同步显示结果。
-        </p>
       </section>
 
       <section id="status" class="status" aria-live="polite">
@@ -111,10 +72,7 @@
       <section id="results" class="results" hidden>
         <div id="mask-section" class="result-group" hidden>
           <div class="group-header">
-            <div>
-              <h2>面具结果</h2>
-              <p class="group-copy">显示面具自身图鉴分，以及它参与的组合称号。</p>
-            </div>
+            <h2>面具结果</h2>
             <span id="mask-count" class="pill"></span>
           </div>
           <div id="mask-list" class="card-grid"></div>
@@ -122,10 +80,7 @@
 
         <div id="achievement-section" class="result-group" hidden>
           <div class="group-header">
-            <div>
-              <h2>称号结果</h2>
-              <p class="group-copy">显示称号分值和它所要求的面具。</p>
-            </div>
+            <h2>称号结果</h2>
             <span id="achievement-count" class="pill"></span>
           </div>
           <div id="achievement-list" class="card-grid"></div>

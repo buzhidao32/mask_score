@@ -11,7 +11,6 @@ const elements = {
   form: document.getElementById("search-form"),
   input: document.getElementById("query-input"),
   clearButton: document.getElementById("clear-button"),
-  helper: document.getElementById("helper-text"),
   status: document.getElementById("status"),
   suggestions: document.getElementById("suggestions"),
   results: document.getElementById("results"),
@@ -23,8 +22,6 @@ const elements = {
   achievementList: document.getElementById("achievement-list"),
   maskTemplate: document.getElementById("mask-card-template"),
   achievementTemplate: document.getElementById("achievement-card-template"),
-  maskTotal: document.getElementById("mask-total"),
-  achievementTotal: document.getElementById("achievement-total"),
   quickChips: Array.from(document.querySelectorAll(".quick-chip")),
 };
 
@@ -44,12 +41,7 @@ async function init() {
     state.achievements = (payload.achievements || []).map(enhanceAchievement);
     state.loaded = true;
 
-    elements.maskTotal.textContent = String(payload.meta?.maskCount ?? state.masks.length);
-    elements.achievementTotal.textContent = String(
-      payload.meta?.achievementCount ?? state.achievements.length,
-    );
-
-    state.defaultStatus = `已载入 ${state.masks.length} 个面具与 ${state.achievements.length} 个称号，支持中文、全拼、首字母实时查询。`;
+    state.defaultStatus = `已载入 ${state.masks.length} 个面具与 ${state.achievements.length} 个称号。`;
 
     const preset = readPresetQuery();
     if (preset) {
@@ -349,16 +341,17 @@ function renderSuggestions(maskMatches, achievementMatches) {
   maskMatches.slice(0, 3).forEach((mask) => {
     suggestions.push({
       query: mask.maskName,
-      title: mask.maskName,
-      meta: `面具 · ${mask.maskId}`,
+      title: `${mask.maskName} · ${mask.maskId}`,
     });
   });
 
   achievementMatches.slice(0, 3).forEach((achievement) => {
     suggestions.push({
       query: achievement.achievement,
-      title: achievement.achievement,
-      meta: achievement.type === "single" ? "称号 · 单面具图鉴" : "称号 · 组合图鉴",
+      title:
+        achievement.type === "single"
+          ? `${achievement.achievement} · 单面具图鉴`
+          : `${achievement.achievement} · 组合图鉴`,
     });
   });
 
@@ -366,7 +359,7 @@ function renderSuggestions(maskMatches, achievementMatches) {
   const seen = new Set();
 
   suggestions.forEach((item) => {
-    const key = `${item.query}|${item.meta}`;
+    const key = `${item.query}|${item.title}`;
     if (seen.has(key)) {
       return;
     }
@@ -385,7 +378,7 @@ function renderSuggestions(maskMatches, achievementMatches) {
     button.type = "button";
     button.className = "suggestion-item";
     button.dataset.query = item.query;
-    button.innerHTML = `<span class="suggestion-title">${item.title}</span><span class="suggestion-meta">${item.meta}</span>`;
+    button.textContent = item.title;
     return button;
   });
 
