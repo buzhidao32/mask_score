@@ -5,7 +5,6 @@ import argparse
 import json
 import re
 from collections import defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -124,7 +123,6 @@ def build_payload(mask_upgrade_path: str, tujian_path: str) -> dict:
 
     return {
         "meta": {
-            "generatedAt": datetime.now(timezone.utc).isoformat(),
             "maskCount": len(masks),
             "achievementCount": len(achievements),
             "sources": {

@@ -22,7 +22,6 @@ const elements = {
   achievementList: document.getElementById("achievement-list"),
   maskTemplate: document.getElementById("mask-card-template"),
   achievementTemplate: document.getElementById("achievement-card-template"),
-  quickChips: Array.from(document.querySelectorAll(".quick-chip")),
 };
 
 init();
@@ -41,7 +40,7 @@ async function init() {
     state.achievements = (payload.achievements || []).map(enhanceAchievement);
     state.loaded = true;
 
-    state.defaultStatus = `已载入 ${state.masks.length} 个面具与 ${state.achievements.length} 个称号。`;
+    state.defaultStatus = `已载入 ${state.masks.length} 个面具与 ${state.achievements.length} 个称号`;
 
     const preset = readPresetQuery();
     if (preset) {
@@ -77,16 +76,6 @@ function bindEvents() {
   });
 
   elements.clearButton.addEventListener("click", clearQuery);
-
-  elements.quickChips.forEach((chip) => {
-    chip.addEventListener("click", () => {
-      const query = chip.dataset.query || "";
-      elements.input.value = query;
-      toggleClearButton();
-      runSearch(query);
-      elements.input.focus();
-    });
-  });
 
   elements.suggestions.addEventListener("click", (event) => {
     const button = event.target.closest("[data-query]");
@@ -298,6 +287,23 @@ function searchCollection(items, query, field) {
     .map((result) => result.item);
 }
 
+function filterAchievementMatches(masks, achievements) {
+  const matchedMasksById = new Map(masks.map((mask) => [mask.maskId, mask]));
+
+  return achievements.filter((achievement) => {
+    if (achievement.type !== "single") {
+      return true;
+    }
+
+    const mask = matchedMasksById.get(achievement.demandIds[0]);
+    if (!mask) {
+      return true;
+    }
+
+    return achievement.achievement !== mask.maskName;
+  });
+}
+
 function runSearch(rawQuery) {
   if (!state.loaded) {
     return;
@@ -314,7 +320,10 @@ function runSearch(rawQuery) {
 
   const query = buildQuery(cleaned);
   const maskMatches = searchCollection(state.masks, query, "maskName");
-  const achievementMatches = searchCollection(state.achievements, query, "achievement");
+  const achievementMatches = filterAchievementMatches(
+    maskMatches,
+    searchCollection(state.achievements, query, "achievement"),
+  );
 
   renderSuggestions(maskMatches, achievementMatches);
   renderResults(cleaned, maskMatches, achievementMatches);
@@ -452,8 +461,18 @@ function createMaskCard(mask) {
   const comboList = fragment.querySelector(".detail-list");
   if (comboAchievements.length) {
     comboAchievements.forEach((item) => {
+      const partners = item.demandIds
+        .map((maskId, index) => ({
+          maskId,
+          maskName: item.demandNames[index] || maskId,
+        }))
+        .filter((entry) => entry.maskId !== mask.maskId)
+        .map((entry) => entry.maskName);
+
       const li = document.createElement("li");
-      li.textContent = `${item.achievement} · ${item.point} 分`;
+      li.textContent = partners.length
+        ? `${item.achievement} · ${item.point} 分 · ${partners.join(" / ")}`
+        : `${item.achievement} · ${item.point} 分`;
       comboList.appendChild(li);
     });
   } else {
