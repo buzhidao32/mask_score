@@ -30,7 +30,7 @@ async function init() {
   bindEvents();
 
   try {
-    const response = await fetch("./data/mask_scores.json", { cache: "no-store" });
+    const response = await fetch("./data/mask_scores.json");
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -401,13 +401,13 @@ function renderResults(query, masks, achievements) {
   elements.results.hidden = false;
 
   if (!masks.length && !achievements.length) {
-    elements.status.textContent = `没有找到和“${query}”相关的结果。可试试：嫦娥、广寒上仙、ghsx、niulang。`;
+    elements.status.textContent = `没有找到和“${query}”相关的结果，可试试：嫦娥、广寒上仙、ghsx、niulang`;
     elements.maskSection.hidden = true;
     elements.achievementSection.hidden = true;
     return;
   }
 
-  elements.status.textContent = `“${query}” 共匹配到 ${masks.length} 条面具结果、${achievements.length} 条称号结果。`;
+  elements.status.textContent = `“${query}” 共匹配到 ${masks.length} 条面具结果、${achievements.length} 条称号结果`;
 
   if (masks.length) {
     elements.maskCount.textContent = `${masks.length} 条`;
@@ -453,9 +453,9 @@ function createMaskCard(mask) {
   if (mask.directAchievement) {
     directLine.textContent = `${mask.directAchievement.achievement} · ${mask.directAchievement.point} 分`;
   } else if (comboAchievements.length) {
-    directLine.innerHTML = '<span class="empty-note">暂无单独图鉴分，仅参与组合称号。</span>';
+    directLine.innerHTML = '<span class="empty-note">暂无单独图鉴分，仅参与组合称号</span>';
   } else {
-    directLine.innerHTML = '<span class="empty-note">暂无图鉴分数据。</span>';
+    directLine.innerHTML = '<span class="empty-note">暂无图鉴分数据</span>';
   }
 
   const comboList = fragment.querySelector(".detail-list");
@@ -478,7 +478,7 @@ function createMaskCard(mask) {
   } else {
     const li = document.createElement("li");
     li.className = "empty-note";
-    li.textContent = "没有相关组合称号。";
+    li.textContent = "没有相关组合称号";
     comboList.appendChild(li);
   }
 
