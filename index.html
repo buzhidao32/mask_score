@@ -9,9 +9,45 @@
       content="输入面具名、图鉴称号或拼音，实时查询面具图鉴分与组合称号分。"
     />
     <link rel="icon" href="data:," />
+    <script>
+      (() => {
+        try {
+          const theme = localStorage.getItem("mask-score-theme");
+          if (theme === "light" || theme === "dark") {
+            document.documentElement.dataset.theme = theme;
+          }
+        } catch (error) {}
+      })();
+    </script>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <button
+      id="theme-toggle"
+      class="theme-toggle"
+      type="button"
+      aria-label="切换为黑夜模式"
+      aria-pressed="false"
+    >
+      <span class="theme-toggle-orbit" aria-hidden="true">
+        <span class="theme-toggle-glow"></span>
+        <span class="theme-toggle-icon theme-toggle-icon-light">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path
+              d="M12 5.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0-3 1.1 2.1h-2.2L12 2.5Zm0 19 1.1-2.1h-2.2l1.1 2.1ZM4.7 4.7l2.3.7-1.6 1.6-.7-2.3Zm14.6 14.6-.7-2.3-1.6 1.6 2.3.7ZM2.5 12l2.1-1.1v2.2L2.5 12Zm19 0-2.1-1.1v2.2l2.1-1.1ZM4.7 19.3l.7-2.3 1.6 1.6-2.3.7ZM19.3 4.7l-2.3.7 1.6 1.6.7-2.3Z"
+            />
+          </svg>
+        </span>
+        <span class="theme-toggle-icon theme-toggle-icon-dark">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path
+              d="M20.2 15.2A8.2 8.2 0 0 1 8.8 3.8 8.9 8.9 0 1 0 20.2 15.2Z"
+            />
+          </svg>
+        </span>
+      </span>
+      <span id="theme-toggle-text" class="theme-toggle-text">黑夜</span>
+    </button>
     <main class="page">
       <section class="masthead">
         <h1>放置江湖面具分查询</h1>
@@ -53,6 +89,41 @@
         </form>
 
         <div id="suggestions" class="suggestions" hidden></div>
+
+        <form id="mask-filter-form" class="filter-form" aria-label="面具筛选">
+          <span class="filter-title">面具筛选</span>
+          <div class="filter-group" role="group" aria-labelledby="upgrade-filter-title">
+            <span id="upgrade-filter-title" class="filter-group-title">升级</span>
+            <label class="filter-option">
+              <input type="checkbox" name="upgrade-filter" value="upgradable" />
+              <span>可升级</span>
+            </label>
+            <label class="filter-option">
+              <input type="checkbox" name="upgrade-filter" value="not-upgradable" />
+              <span>不可升级</span>
+            </label>
+          </div>
+          <div class="filter-group" role="group" aria-labelledby="decompose-filter-title">
+            <span id="decompose-filter-title" class="filter-group-title">分解</span>
+            <label class="filter-option">
+              <input type="checkbox" name="decompose-filter" value="decomposable" />
+              <span>可分解</span>
+            </label>
+            <label class="filter-option">
+              <input type="checkbox" name="decompose-filter" value="not-decomposable" />
+              <span>不可分解</span>
+            </label>
+          </div>
+        </form>
+
+        <form id="trait-form" class="trait-form" aria-label="绣女特性加成" hidden>
+          <div class="trait-copy">
+            <span class="trait-title">绣女特性</span>
+            <span class="trait-limit">最多 3 个</span>
+          </div>
+          <div id="trait-options" class="trait-options"></div>
+          <output id="trait-bonus" class="trait-bonus">总加成 0%</output>
+        </form>
       </section>
 
       <section id="status" class="status" aria-live="polite">
@@ -85,6 +156,13 @@
             <h3 class="card-title"></h3>
             <p class="card-subtitle"></p>
             <p class="alias-line" hidden></p>
+            <div class="mask-meta" hidden>
+              <details class="upgrade-costs" hidden>
+                <summary class="info-chip level-chip"></summary>
+                <ul class="upgrade-cost-list"></ul>
+              </details>
+              <span class="info-chip decompose-chip" hidden></span>
+            </div>
           </div>
           <span class="score-badge"></span>
         </div>

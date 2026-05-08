@@ -1,16 +1,33 @@
 const pinyinApi = window.pinyinPro || {};
+const THEME_STORAGE_KEY = "mask-score-theme";
+const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
+const reducedMotionMedia = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 const state = {
   loaded: false,
+  themeSwitching: false,
   masks: [],
   achievements: [],
+  servantMaterialTraits: [],
+  selectedTraitIds: new Set(),
+  materialBonusPercent: 0,
+  maskFilters: {
+    upgrade: null,
+    decompose: null,
+  },
   defaultStatus: "",
 };
 
 const elements = {
+  themeToggle: document.getElementById("theme-toggle"),
+  themeToggleText: document.getElementById("theme-toggle-text"),
   form: document.getElementById("search-form"),
   input: document.getElementById("query-input"),
   clearButton: document.getElementById("clear-button"),
+  maskFilterForm: document.getElementById("mask-filter-form"),
+  traitForm: document.getElementById("trait-form"),
+  traitOptions: document.getElementById("trait-options"),
+  traitBonus: document.getElementById("trait-bonus"),
   status: document.getElementById("status"),
   suggestions: document.getElementById("suggestions"),
   results: document.getElementById("results"),
@@ -27,6 +44,7 @@ const elements = {
 init();
 
 async function init() {
+  initTheme();
   bindEvents();
 
   try {
@@ -38,9 +56,13 @@ async function init() {
     const payload = await response.json();
     state.masks = (payload.masks || []).map(enhanceMask);
     state.achievements = (payload.achievements || []).map(enhanceAchievement);
+    state.servantMaterialTraits = normalizeTraitOptions(
+      payload.servantMaterialTraits || [],
+    );
     state.loaded = true;
 
     state.defaultStatus = `已载入 ${state.masks.length} 个面具与 ${state.achievements.length} 个称号`;
+    renderTraitForm();
 
     const preset = readPresetQuery();
     if (preset) {
@@ -58,6 +80,8 @@ async function init() {
 }
 
 function bindEvents() {
+  elements.themeToggle.addEventListener("click", toggleTheme);
+
   elements.form.addEventListener("submit", (event) => {
     event.preventDefault();
     runSearch(elements.input.value);
@@ -77,6 +101,10 @@ function bindEvents() {
 
   elements.clearButton.addEventListener("click", clearQuery);
 
+  elements.maskFilterForm.addEventListener("change", handleMaskFilterChange);
+
+  elements.traitForm.addEventListener("change", handleTraitChange);
+
   elements.suggestions.addEventListener("click", (event) => {
     const button = event.target.closest("[data-query]");
     if (!button) {
@@ -89,6 +117,88 @@ function bindEvents() {
     runSearch(query);
     elements.input.focus();
   });
+}
+
+function initTheme() {
+  updateThemeToggle();
+
+  const updateOnSystemThemeChange = () => {
+    if (!document.documentElement.dataset.theme) {
+      updateThemeToggle();
+    }
+  };
+
+  if (typeof themeMedia.addEventListener === "function") {
+    themeMedia.addEventListener("change", updateOnSystemThemeChange);
+  } else if (typeof themeMedia.addListener === "function") {
+    themeMedia.addListener(updateOnSystemThemeChange);
+  }
+}
+
+function getSystemTheme() {
+  return themeMedia.matches ? "dark" : "light";
+}
+
+function getActiveTheme() {
+  const selectedTheme = document.documentElement.dataset.theme;
+  return selectedTheme === "dark" || selectedTheme === "light"
+    ? selectedTheme
+    : getSystemTheme();
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch (error) {}
+
+  updateThemeToggle();
+}
+
+function setTheme(theme) {
+  if (state.themeSwitching) {
+    return;
+  }
+
+  const root = document.documentElement;
+  const shouldAnimate = !reducedMotionMedia.matches;
+  let cleanupTimer = 0;
+  state.themeSwitching = true;
+
+  const cleanup = () => {
+    window.clearTimeout(cleanupTimer);
+    root.classList.remove("is-theme-switching");
+    elements.themeToggle.classList.remove("is-switching");
+    state.themeSwitching = false;
+  };
+
+  root.classList.add("is-theme-switching");
+  elements.themeToggle.classList.add("is-switching");
+
+  if (shouldAnimate && typeof document.startViewTransition === "function") {
+    const transition = document.startViewTransition(() => applyTheme(theme));
+    transition.finished.then(cleanup, cleanup);
+    return;
+  }
+
+  applyTheme(theme);
+  cleanupTimer = window.setTimeout(cleanup, shouldAnimate ? 280 : 0);
+}
+
+function toggleTheme() {
+  setTheme(getActiveTheme() === "dark" ? "light" : "dark");
+}
+
+function updateThemeToggle() {
+  const currentTheme = getActiveTheme();
+  const nextThemeText = currentTheme === "dark" ? "白天" : "黑夜";
+  elements.themeToggleText.textContent = nextThemeText;
+  elements.themeToggle.setAttribute(
+    "aria-label",
+    `切换为${nextThemeText}模式`,
+  );
+  elements.themeToggle.setAttribute("aria-pressed", currentTheme === "dark");
 }
 
 function readPresetQuery() {
@@ -160,6 +270,13 @@ function enhanceMask(mask) {
   return {
     ...mask,
     aliases,
+    maxLevel: Number(mask.maxLevel) || 1,
+    upgradeCosts: Array.isArray(mask.upgradeCosts) ? mask.upgradeCosts : [],
+    canDecompose: Boolean(mask.canDecompose),
+    decomposeMaterial: Number(mask.decomposeMaterial) || 0,
+    hasDecomposeData:
+      Object.prototype.hasOwnProperty.call(mask, "canDecompose") ||
+      Object.prototype.hasOwnProperty.call(mask, "decomposeMaterial"),
     _searchEntries: buildSearchEntries([...mask.allNames, mask.maskId]),
   };
 }
@@ -169,6 +286,139 @@ function enhanceAchievement(achievement) {
     ...achievement,
     _searchEntries: buildSearchEntries([achievement.achievement]),
   };
+}
+
+function handleMaskFilterChange(event) {
+  const input = event.target.closest('input[type="checkbox"]');
+  if (!input || !elements.maskFilterForm.contains(input)) {
+    return;
+  }
+
+  const filterKey =
+    input.name === "upgrade-filter"
+      ? "upgrade"
+      : input.name === "decompose-filter"
+        ? "decompose"
+        : "";
+  if (!filterKey) {
+    return;
+  }
+
+  if (input.checked) {
+    elements.maskFilterForm
+      .querySelectorAll(`input[name="${input.name}"]`)
+      .forEach((option) => {
+        if (option !== input) {
+          option.checked = false;
+          option.closest(".filter-option")?.classList.remove("is-selected");
+        }
+      });
+    state.maskFilters[filterKey] = input.value;
+    input.closest(".filter-option")?.classList.add("is-selected");
+  } else {
+    state.maskFilters[filterKey] = null;
+    input.closest(".filter-option")?.classList.remove("is-selected");
+  }
+
+  refreshCurrentResults();
+}
+
+function normalizeTraitOptions(traits) {
+  return traits
+    .map((trait) => ({
+      id: String(trait.id || ""),
+      name: String(trait.name || ""),
+      level: Number(trait.level) || 0,
+      bonusPercent: Number(trait.bonusPercent) || 0,
+    }))
+    .filter((trait) => trait.id && trait.name && trait.bonusPercent > 0)
+    .sort((left, right) => left.level - right.level);
+}
+
+function handleTraitChange(event) {
+  const input = event.target.closest('input[name="servant-trait"]');
+  if (!input) {
+    return;
+  }
+
+  if (input.checked) {
+    if (state.selectedTraitIds.size >= 3) {
+      input.checked = false;
+      return;
+    }
+    state.selectedTraitIds.add(input.value);
+  } else {
+    state.selectedTraitIds.delete(input.value);
+  }
+
+  updateMaterialBonus();
+  renderTraitForm();
+  refreshCurrentResults();
+}
+
+function updateMaterialBonus() {
+  state.materialBonusPercent = state.servantMaterialTraits.reduce(
+    (sum, trait) =>
+      state.selectedTraitIds.has(trait.id) ? sum + trait.bonusPercent : sum,
+    0,
+  );
+}
+
+function renderTraitForm() {
+  if (!state.servantMaterialTraits.length) {
+    elements.traitForm.hidden = true;
+    elements.traitOptions.replaceChildren();
+    return;
+  }
+
+  const selectedCount = state.selectedTraitIds.size;
+  const options = state.servantMaterialTraits.map((trait) => {
+    const checked = state.selectedTraitIds.has(trait.id);
+    const disabled = !checked && selectedCount >= 3;
+    const label = document.createElement("label");
+    label.className = "trait-option";
+    if (checked) {
+      label.classList.add("is-selected");
+    }
+    if (disabled) {
+      label.classList.add("is-disabled");
+    }
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.name = "servant-trait";
+    input.value = trait.id;
+    input.checked = checked;
+    input.disabled = disabled;
+
+    const name = document.createElement("span");
+    name.className = "trait-name";
+    name.textContent = trait.name;
+
+    const bonus = document.createElement("span");
+    bonus.className = "trait-percent";
+    bonus.textContent = `+${trait.bonusPercent}%`;
+
+    label.append(input, name, bonus);
+    return label;
+  });
+
+  elements.traitOptions.replaceChildren(...options);
+  elements.traitBonus.textContent = `总加成 ${state.materialBonusPercent}%`;
+  elements.traitForm.hidden = false;
+}
+
+function refreshCurrentResults() {
+  runSearch(elements.input.value);
+}
+
+function getAdjustedDecomposeMaterial(baseAmount) {
+  const amount = Number(baseAmount) || 0;
+  if (state.materialBonusPercent <= 0) {
+    return amount;
+  }
+
+  return Math.floor(amount * (1 + state.materialBonusPercent / 100));
 }
 
 function buildQuery(rawQuery) {
@@ -187,8 +437,7 @@ function toggleClearButton() {
 function clearQuery() {
   elements.input.value = "";
   toggleClearButton();
-  syncQueryParam("");
-  renderIdleState();
+  runSearch("");
   elements.input.focus();
 }
 
@@ -304,6 +553,36 @@ function filterAchievementMatches(masks, achievements) {
   });
 }
 
+function hasActiveMaskFilters() {
+  return Boolean(state.maskFilters.upgrade || state.maskFilters.decompose);
+}
+
+function isMaskUpgradable(mask) {
+  return mask.maxLevel > 1;
+}
+
+function applyMaskFilters(masks) {
+  if (!hasActiveMaskFilters()) {
+    return masks;
+  }
+
+  return masks.filter((mask) => {
+    if (state.maskFilters.upgrade === "upgradable" && !isMaskUpgradable(mask)) {
+      return false;
+    }
+    if (state.maskFilters.upgrade === "not-upgradable" && isMaskUpgradable(mask)) {
+      return false;
+    }
+    if (state.maskFilters.decompose === "decomposable" && !mask.canDecompose) {
+      return false;
+    }
+    if (state.maskFilters.decompose === "not-decomposable" && mask.canDecompose) {
+      return false;
+    }
+    return true;
+  });
+}
+
 function runSearch(rawQuery) {
   if (!state.loaded) {
     return;
@@ -312,14 +591,17 @@ function runSearch(rawQuery) {
   const cleaned = normalizeQuery(rawQuery);
   if (!cleaned) {
     syncQueryParam("");
-    renderIdleState();
+    renderSuggestions([], []);
+    renderFilteredMasks(applyMaskFilters(state.masks));
     return;
   }
 
   syncQueryParam(cleaned);
 
   const query = buildQuery(cleaned);
-  const maskMatches = searchCollection(state.masks, query, "maskName");
+  const maskMatches = applyMaskFilters(
+    searchCollection(state.masks, query, "maskName"),
+  );
   const achievementMatches = filterAchievementMatches(
     maskMatches,
     searchCollection(state.achievements, query, "achievement"),
@@ -329,11 +611,35 @@ function runSearch(rawQuery) {
   renderResults(cleaned, maskMatches, achievementMatches);
 }
 
+function renderFilteredMasks(masks) {
+  elements.maskList.replaceChildren();
+  elements.achievementList.replaceChildren();
+  elements.results.hidden = false;
+  elements.achievementSection.hidden = true;
+
+  if (!masks.length) {
+    elements.status.textContent = "没有找到符合筛选的面具";
+    elements.maskSection.hidden = true;
+    return;
+  }
+
+  elements.status.textContent = hasActiveMaskFilters()
+    ? `筛选出 ${masks.length} 条面具结果`
+    : `共显示 ${masks.length} 条面具结果`;
+  elements.maskCount.textContent = `${masks.length} 条`;
+  elements.maskSection.hidden = false;
+  elements.maskList.append(...masks.map(createMaskCard));
+}
+
 function renderIdleState() {
-  elements.status.textContent = state.defaultStatus || "正在加载数据...";
   elements.suggestions.hidden = true;
   elements.suggestions.replaceChildren();
-  renderEmpty();
+  if (state.loaded) {
+    renderFilteredMasks(applyMaskFilters(state.masks));
+  } else {
+    elements.status.textContent = state.defaultStatus || "正在加载数据...";
+    renderEmpty();
+  }
 }
 
 function renderEmpty() {
@@ -446,6 +752,8 @@ function createMaskCard(mask) {
     aliasLine.textContent = `别名：${mask.aliases.join(" / ")}`;
   }
 
+  renderMaskMeta(fragment, mask);
+
   fragment.querySelector(".score-badge").textContent =
     mask.directPoint === null ? "暂无单独分" : `${mask.directPoint} 分`;
 
@@ -466,7 +774,6 @@ function createMaskCard(mask) {
           maskId,
           maskName: item.demandNames[index] || maskId,
         }))
-        .filter((entry) => entry.maskId !== mask.maskId)
         .map((entry) => entry.maskName);
 
       const li = document.createElement("li");
@@ -483,6 +790,44 @@ function createMaskCard(mask) {
   }
 
   return fragment;
+}
+
+function renderMaskMeta(fragment, mask) {
+  const meta = fragment.querySelector(".mask-meta");
+  const upgradeCosts = fragment.querySelector(".upgrade-costs");
+  const levelSummary = fragment.querySelector(".level-chip");
+  const upgradeCostList = fragment.querySelector(".upgrade-cost-list");
+  const decomposeChip = fragment.querySelector(".decompose-chip");
+  let hasMeta = false;
+
+  if (mask.maxLevel > 1) {
+    hasMeta = true;
+    upgradeCosts.hidden = false;
+    levelSummary.textContent = `最高 ${mask.maxLevel} 级`;
+
+    mask.upgradeCosts.forEach((cost) => {
+      const li = document.createElement("li");
+      li.textContent = `${cost.level}级：${cost.text}`;
+      upgradeCostList.appendChild(li);
+    });
+  }
+
+  if (mask.canDecompose) {
+    const adjustedMaterial = getAdjustedDecomposeMaterial(mask.decomposeMaterial);
+    hasMeta = true;
+    decomposeChip.hidden = false;
+    decomposeChip.textContent = `分解得${adjustedMaterial}饰品材料`;
+    decomposeChip.title =
+      state.materialBonusPercent > 0
+        ? `基础${mask.decomposeMaterial}，烛阴加成${state.materialBonusPercent}%`
+        : "";
+  } else if (mask.hasDecomposeData) {
+    hasMeta = true;
+    decomposeChip.hidden = false;
+    decomposeChip.textContent = "不可分解";
+  }
+
+  meta.hidden = !hasMeta;
 }
 
 function createAchievementCard(item) {
