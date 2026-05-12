@@ -91,38 +91,66 @@
         <div id="suggestions" class="suggestions" hidden></div>
 
         <form id="mask-filter-form" class="filter-form" aria-label="面具筛选">
-          <span class="filter-title">面具筛选</span>
-          <div class="filter-group" role="group" aria-labelledby="upgrade-filter-title">
-            <span id="upgrade-filter-title" class="filter-group-title">升级</span>
-            <label class="filter-option">
-              <input type="checkbox" name="upgrade-filter" value="upgradable" />
-              <span>可升级</span>
-            </label>
-            <label class="filter-option">
-              <input type="checkbox" name="upgrade-filter" value="not-upgradable" />
-              <span>不可升级</span>
-            </label>
+          <div class="form-panel-head">
+            <span class="filter-title">面具筛选</span>
+            <button
+              id="mask-filter-toggle"
+              class="collapse-toggle"
+              type="button"
+              aria-controls="mask-filter-content"
+              aria-expanded="true"
+            >
+              <span class="collapse-toggle-label">收起</span>
+              <span class="collapse-toggle-icon" aria-hidden="true"></span>
+            </button>
           </div>
-          <div class="filter-group" role="group" aria-labelledby="decompose-filter-title">
-            <span id="decompose-filter-title" class="filter-group-title">分解</span>
-            <label class="filter-option">
-              <input type="checkbox" name="decompose-filter" value="decomposable" />
-              <span>可分解</span>
-            </label>
-            <label class="filter-option">
-              <input type="checkbox" name="decompose-filter" value="not-decomposable" />
-              <span>不可分解</span>
-            </label>
+          <div id="mask-filter-content" class="filter-content">
+            <div class="filter-group" role="group" aria-labelledby="upgrade-filter-title">
+              <span id="upgrade-filter-title" class="filter-group-title">升级</span>
+              <label class="filter-option">
+                <input type="checkbox" name="upgrade-filter" value="upgradable" />
+                <span>可升级</span>
+              </label>
+              <label class="filter-option">
+                <input type="checkbox" name="upgrade-filter" value="not-upgradable" />
+                <span>不可升级</span>
+              </label>
+            </div>
+            <div class="filter-group" role="group" aria-labelledby="decompose-filter-title">
+              <span id="decompose-filter-title" class="filter-group-title">分解</span>
+              <label class="filter-option">
+                <input type="checkbox" name="decompose-filter" value="decomposable" />
+                <span>可分解</span>
+              </label>
+              <label class="filter-option">
+                <input type="checkbox" name="decompose-filter" value="not-decomposable" />
+                <span>不可分解</span>
+              </label>
+            </div>
           </div>
         </form>
 
         <form id="trait-form" class="trait-form" aria-label="绣女特性加成" hidden>
-          <div class="trait-copy">
-            <span class="trait-title">绣女特性</span>
-            <span class="trait-limit">最多 3 个</span>
+          <div class="form-panel-head">
+            <div class="trait-copy">
+              <span class="trait-title">绣女特性</span>
+              <span class="trait-limit">最多 3 个</span>
+            </div>
+            <button
+              id="trait-toggle"
+              class="collapse-toggle"
+              type="button"
+              aria-controls="trait-content"
+              aria-expanded="true"
+            >
+              <span class="collapse-toggle-label">收起</span>
+              <span class="collapse-toggle-icon" aria-hidden="true"></span>
+            </button>
           </div>
-          <div id="trait-options" class="trait-options"></div>
-          <output id="trait-bonus" class="trait-bonus">总加成 0%</output>
+          <div id="trait-content" class="trait-content">
+            <div id="trait-options" class="trait-options"></div>
+            <output id="trait-bonus" class="trait-bonus">总加成 0%</output>
+          </div>
         </form>
       </section>
 

@@ -376,10 +376,9 @@ button {
   margin-top: 12px;
 }
 
-.filter-form {
+.filter-form,
+.trait-form {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
-  align-items: center;
   gap: 12px;
   margin-top: 14px;
   padding: 12px;
@@ -388,11 +387,82 @@ button {
   background: rgba(255, 255, 255, 0.48);
 }
 
+.form-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
 .filter-title {
   min-width: max-content;
   font-size: 1rem;
   font-weight: 800;
   line-height: 1.3;
+}
+
+.collapse-toggle {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  place-items: center;
+  align-content: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 66px;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1;
+  transition:
+    background-color var(--transition),
+    border-color var(--transition),
+    color var(--transition);
+}
+
+.collapse-toggle-label {
+  display: block;
+  line-height: 1;
+}
+
+.collapse-toggle-icon {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transform-origin: center;
+  transition: transform var(--transition);
+}
+
+.collapse-toggle[aria-expanded="false"] .collapse-toggle-icon {
+  transform: rotate(-135deg);
+}
+
+.collapse-toggle:hover,
+.collapse-toggle:focus-visible {
+  border-color: rgba(45, 90, 134, 0.34);
+  background: var(--surface-strong);
+  color: var(--accent);
+}
+
+.collapse-toggle:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 3px;
+}
+
+.filter-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
 }
 
 .filter-group {
@@ -453,16 +523,11 @@ button {
   color: var(--accent);
 }
 
-.trait-form {
+.trait-content {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  margin-top: 14px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.48);
 }
 
 .trait-copy {
@@ -746,6 +811,7 @@ button {
 .trait-form,
 .filter-option,
 .trait-option,
+.collapse-toggle,
 .suggestion-item,
 .card,
 .pill,
@@ -861,14 +927,17 @@ html.is-theme-switching::view-transition-new(root) {
 }
 
 :root[data-theme="dark"] .filter-option,
-:root[data-theme="dark"] .trait-option {
+:root[data-theme="dark"] .trait-option,
+:root[data-theme="dark"] .collapse-toggle {
   background: rgba(255, 255, 255, 0.04);
 }
 
 :root[data-theme="dark"] .filter-option:hover,
 :root[data-theme="dark"] .filter-option:focus-within,
 :root[data-theme="dark"] .trait-option:hover,
-:root[data-theme="dark"] .trait-option:focus-within {
+:root[data-theme="dark"] .trait-option:focus-within,
+:root[data-theme="dark"] .collapse-toggle:hover,
+:root[data-theme="dark"] .collapse-toggle:focus-visible {
   border-color: rgba(121, 166, 210, 0.42);
   background: rgba(255, 255, 255, 0.08);
 }
@@ -906,12 +975,13 @@ html.is-theme-switching::view-transition-new(root) {
     grid-column: span 2;
   }
 
-  .trait-form {
+  .filter-content,
+  .trait-content {
     grid-template-columns: 1fr;
   }
 
-  .filter-form {
-    grid-template-columns: 1fr;
+  .form-panel-head {
+    align-items: flex-start;
   }
 
   .filter-title {
@@ -942,6 +1012,107 @@ html.is-theme-switching::view-transition-new(root) {
 
   .trait-bonus {
     justify-self: start;
+  }
+
+  .filter-form:not(.is-collapsed),
+  .trait-form:not(.is-collapsed) {
+    position: fixed;
+    top: var(--mobile-panel-top);
+    right: 28px;
+    left: auto;
+    z-index: 12;
+    width: min(320px, calc(100vw - 56px));
+    max-height: calc(100dvh - var(--mobile-panel-top) - 10px);
+    margin-top: 0;
+    overflow: auto;
+    background: var(--surface-strong);
+    box-shadow: 0 16px 36px rgba(42, 35, 27, 0.18);
+  }
+
+  .filter-form:not(.is-collapsed) {
+    --mobile-panel-top: 108px;
+  }
+
+  .trait-form:not(.is-collapsed) {
+    --mobile-panel-top: 176px;
+  }
+
+  .filter-form:not(.is-collapsed) + .trait-form:not(.is-collapsed) {
+    --mobile-panel-top: 262px;
+  }
+
+  .filter-form.is-collapsed,
+  .trait-form.is-collapsed {
+    position: fixed;
+    right: 0;
+    left: auto;
+    z-index: 11;
+    width: 28px;
+    min-height: 62px;
+    margin-top: 0;
+    padding: 0;
+    gap: 0;
+    overflow: hidden;
+    border-right: 0;
+    border-radius: 16px 0 0 16px;
+    background: var(--surface-strong);
+    box-shadow: 0 12px 28px rgba(42, 35, 27, 0.14);
+  }
+
+  .filter-form.is-collapsed {
+    top: 108px;
+  }
+
+  .trait-form.is-collapsed {
+    top: 176px;
+  }
+
+  .filter-form.is-collapsed .form-panel-head,
+  .trait-form.is-collapsed .form-panel-head {
+    align-items: stretch;
+    height: 100%;
+    gap: 0;
+  }
+
+  .filter-form.is-collapsed .filter-title,
+  .trait-form.is-collapsed .trait-copy {
+    display: none;
+  }
+
+  .filter-form.is-collapsed .collapse-toggle,
+  .trait-form.is-collapsed .collapse-toggle {
+    display: grid;
+    grid-auto-flow: row;
+    grid-auto-rows: max-content;
+    place-items: center;
+    align-content: center;
+    justify-content: center;
+    row-gap: 5px;
+    width: 100%;
+    min-width: 0;
+    min-height: 62px;
+    padding: 6px 0;
+    border: 0;
+    border-radius: inherit;
+    background: transparent;
+    color: var(--accent);
+    font-size: 0.75rem;
+    line-height: 1;
+    letter-spacing: 0;
+    text-align: center;
+    writing-mode: horizontal-tb;
+  }
+
+  .filter-form:not(.is-collapsed) .collapse-toggle .collapse-toggle-icon,
+  .trait-form:not(.is-collapsed) .collapse-toggle .collapse-toggle-icon {
+    transform: rotate(-45deg);
+  }
+
+  .filter-form.is-collapsed .collapse-toggle .collapse-toggle-icon,
+  .trait-form.is-collapsed .collapse-toggle .collapse-toggle-icon {
+    width: 6px;
+    height: 6px;
+    transform: rotate(135deg);
   }
 
   .group-header,
@@ -1039,14 +1210,17 @@ html.is-theme-switching::view-transition-new(root) {
   }
 
   :root:not([data-theme]) .filter-option,
-  :root:not([data-theme]) .trait-option {
+  :root:not([data-theme]) .trait-option,
+  :root:not([data-theme]) .collapse-toggle {
     background: rgba(255, 255, 255, 0.04);
   }
 
   :root:not([data-theme]) .filter-option:hover,
   :root:not([data-theme]) .filter-option:focus-within,
   :root:not([data-theme]) .trait-option:hover,
-  :root:not([data-theme]) .trait-option:focus-within {
+  :root:not([data-theme]) .trait-option:focus-within,
+  :root:not([data-theme]) .collapse-toggle:hover,
+  :root:not([data-theme]) .collapse-toggle:focus-visible {
     border-color: rgba(121, 166, 210, 0.42);
     background: rgba(255, 255, 255, 0.08);
   }

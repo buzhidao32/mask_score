@@ -1,7 +1,9 @@
 const pinyinApi = window.pinyinPro || {};
 const THEME_STORAGE_KEY = "mask-score-theme";
+const PANEL_STORAGE_KEY = "mask-score-panel-state";
 const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
 const reducedMotionMedia = window.matchMedia("(prefers-reduced-motion: reduce)");
+const compactControlsMedia = window.matchMedia("(max-width: 720px)");
 
 const state = {
   loaded: false,
@@ -25,7 +27,11 @@ const elements = {
   input: document.getElementById("query-input"),
   clearButton: document.getElementById("clear-button"),
   maskFilterForm: document.getElementById("mask-filter-form"),
+  maskFilterToggle: document.getElementById("mask-filter-toggle"),
+  maskFilterContent: document.getElementById("mask-filter-content"),
   traitForm: document.getElementById("trait-form"),
+  traitToggle: document.getElementById("trait-toggle"),
+  traitContent: document.getElementById("trait-content"),
   traitOptions: document.getElementById("trait-options"),
   traitBonus: document.getElementById("trait-bonus"),
   status: document.getElementById("status"),
@@ -46,6 +52,7 @@ init();
 async function init() {
   initTheme();
   bindEvents();
+  initResponsivePanels();
 
   try {
     const response = await fetch("./data/mask_scores.json");
@@ -102,8 +109,22 @@ function bindEvents() {
   elements.clearButton.addEventListener("click", clearQuery);
 
   elements.maskFilterForm.addEventListener("change", handleMaskFilterChange);
+  elements.maskFilterToggle.addEventListener("click", () => {
+    toggleCollapsiblePanel(
+      elements.maskFilterContent,
+      elements.maskFilterToggle,
+      "maskFilterCollapsed",
+    );
+  });
 
   elements.traitForm.addEventListener("change", handleTraitChange);
+  elements.traitToggle.addEventListener("click", () => {
+    toggleCollapsiblePanel(
+      elements.traitContent,
+      elements.traitToggle,
+      "traitCollapsed",
+    );
+  });
 
   elements.suggestions.addEventListener("click", (event) => {
     const button = event.target.closest("[data-query]");
@@ -117,6 +138,102 @@ function bindEvents() {
     runSearch(query);
     elements.input.focus();
   });
+}
+
+function initResponsivePanels() {
+  const panelState = readPanelState();
+  setCollapsiblePanelState(
+    elements.maskFilterContent,
+    elements.maskFilterToggle,
+    panelState.maskFilterCollapsed,
+  );
+  setCollapsiblePanelState(
+    elements.traitContent,
+    elements.traitToggle,
+    panelState.traitCollapsed,
+  );
+
+  const handleViewportChange = () => {
+    syncPanelLabels();
+  };
+
+  if (typeof compactControlsMedia.addEventListener === "function") {
+    compactControlsMedia.addEventListener("change", handleViewportChange);
+  } else if (typeof compactControlsMedia.addListener === "function") {
+    compactControlsMedia.addListener(handleViewportChange);
+  }
+}
+
+function readPanelState() {
+  const fallback = {
+    maskFilterCollapsed: true,
+    traitCollapsed: true,
+  };
+
+  try {
+    const stored = JSON.parse(localStorage.getItem(PANEL_STORAGE_KEY) || "{}");
+    return {
+      maskFilterCollapsed:
+        typeof stored.maskFilterCollapsed === "boolean"
+          ? stored.maskFilterCollapsed
+          : fallback.maskFilterCollapsed,
+      traitCollapsed:
+        typeof stored.traitCollapsed === "boolean"
+          ? stored.traitCollapsed
+          : fallback.traitCollapsed,
+    };
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function writePanelState(panelKey, collapsed) {
+  const panelState = readPanelState();
+  panelState[panelKey] = collapsed;
+
+  try {
+    localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(panelState));
+  } catch (error) {}
+}
+
+function syncPanelLabels() {
+  setCollapsiblePanelState(
+    elements.maskFilterContent,
+    elements.maskFilterToggle,
+    elements.maskFilterContent.hidden,
+  );
+  setCollapsiblePanelState(
+    elements.traitContent,
+    elements.traitToggle,
+    elements.traitContent.hidden,
+  );
+}
+
+function toggleCollapsiblePanel(content, toggle, panelKey) {
+  const collapsed = !content.hidden;
+  setCollapsiblePanelState(content, toggle, collapsed);
+  writePanelState(panelKey, collapsed);
+}
+
+function setCollapsiblePanelState(content, toggle, collapsed) {
+  const panel = content.closest(".filter-form, .trait-form");
+  const panelLabel = panel?.getAttribute("aria-label") || "筛选面板";
+  const actionLabel = collapsed ? "展开" : "收起";
+  const compactLabel = panel?.classList.contains("trait-form") ? "特性" : "筛选";
+  const visibleLabel =
+    collapsed && compactControlsMedia.matches ? compactLabel : actionLabel;
+  const label = toggle.querySelector(".collapse-toggle-label");
+
+  content.hidden = collapsed;
+  panel?.classList.toggle("is-collapsed", collapsed);
+  if (label) {
+    label.textContent = visibleLabel;
+  } else {
+    toggle.textContent = visibleLabel;
+  }
+  toggle.setAttribute("aria-label", `${actionLabel}${panelLabel}`);
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+  toggle.title = `${actionLabel}${panelLabel}`;
 }
 
 function initTheme() {
