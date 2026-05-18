@@ -4,3 +4,6 @@ node_modules/
 update-data/*.lua
 update-source.txt
 preview-*.log
+photo/
+.playwright-mcp/
+INVENTORY_OCR_PROGRESS.md

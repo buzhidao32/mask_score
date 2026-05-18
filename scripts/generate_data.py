@@ -13,7 +13,9 @@ ACHIEVEMENT_PATTERN = re.compile(
     r'\["demand"\]=\[\[([^\]]+)\]\],\["point"\]=(\d+)'
 )
 MASK_ID_PATTERN = re.compile(r"mianju\d+")
+TOKEN_ID_PATTERN = re.compile(r"xinwu[\w_]+")
 ROW_START_PATTERN = re.compile(r'\["([^"]+)"\]=\{')
+APPEARANCE_SCORE_LIMIT = 12
 ITEM_ATTR_FILES = (
     "Items.lua",
     "mask.lua",
@@ -112,6 +114,13 @@ def iter_lua_keyed_rows(text: str):
         index = body_end + 1
 
 
+def parse_display_order(key: str, fallback: int) -> int:
+    try:
+        return int(key)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def extract_string_field(body: str, field_name: str) -> str | None:
     match = re.search(rf'{re.escape(field_name)}="([^"]*)"', body)
     return match.group(1) if match else None
@@ -150,6 +159,20 @@ def extract_braced_field(body: str, field_name: str) -> str:
 
     end = find_matching_brace(body, start)
     return body[start : end + 1]
+
+
+def extract_table_body(text: str, field_name: str) -> str:
+    marker = f'["{field_name}"]='
+    marker_index = text.find(marker)
+    if marker_index == -1:
+        return ""
+
+    start = text.find("{", marker_index + len(marker))
+    if start == -1:
+        return ""
+
+    end = find_matching_brace(text, start)
+    return text[start + 1 : end]
 
 
 def parse_mask_upgrade_rows(mask_upgrade_text: str) -> list[dict]:
@@ -395,9 +418,14 @@ def build_achievements(
 ) -> list[dict]:
     achievements: list[dict] = []
 
-    for achievement, achievement_id, demand, point_text in ACHIEVEMENT_PATTERN.findall(
-        tujian_text
-    ):
+    for fallback_order, (row_key, body) in enumerate(iter_lua_keyed_rows(tujian_text), 1):
+        achievement = extract_lua_text_field(body, "achievement")
+        achievement_id = extract_lua_text_field(body, "achievementId")
+        demand = extract_lua_text_field(body, "demand") or ""
+        point = extract_lua_number_field(body, "point")
+        if not achievement or not achievement_id or point is None:
+            continue
+
         demand_ids = MASK_ID_PATTERN.findall(demand)
         if not demand_ids:
             continue
@@ -406,7 +434,8 @@ def build_achievements(
             {
                 "achievement": achievement,
                 "achievementId": achievement_id,
-                "point": int(point_text),
+                "displayOrder": parse_display_order(row_key, fallback_order),
+                "point": point,
                 "demandIds": demand_ids,
                 "demandNames": [
                     mask_names.get(mask_id, [mask_id])[0] for mask_id in demand_ids
@@ -416,6 +445,76 @@ def build_achievements(
         )
 
     return achievements
+
+
+def build_mask_achievements(
+    tujian_text: str,
+    mask_names: dict[str, list[str]],
+) -> list[dict]:
+    category_body = extract_table_body(tujian_text, "面具")
+    return build_achievements(category_body or tujian_text, mask_names)
+
+
+def build_token_achievements(tujian_text: str) -> list[dict]:
+    category_body = extract_table_body(tujian_text, "信物")
+    achievements: list[dict] = []
+
+    for fallback_order, (row_key, body) in enumerate(iter_lua_keyed_rows(category_body), 1):
+        achievement = extract_lua_text_field(body, "achievement")
+        achievement_id = extract_lua_text_field(body, "achievementId")
+        demand = extract_lua_text_field(body, "demand") or ""
+        point = extract_lua_number_field(body, "point")
+        if not achievement or not achievement_id or point is None:
+            continue
+
+        demand_ids = TOKEN_ID_PATTERN.findall(demand)
+        achievements.append(
+            {
+                "achievement": achievement,
+                "achievementId": achievement_id,
+                "displayOrder": parse_display_order(row_key, fallback_order),
+                "point": point,
+                "demandIds": demand_ids,
+                "demandNames": demand_ids,
+                "type": "token",
+                "category": "信物",
+            }
+        )
+
+    return achievements
+
+
+def build_appearance_achievements(tujian_text: str) -> list[dict]:
+    category_body = extract_table_body(tujian_text, "江湖容貌")
+    achievements: list[dict] = []
+
+    for fallback_order, (row_key, body) in enumerate(iter_lua_keyed_rows(category_body), 1):
+        achievement = extract_lua_text_field(body, "achievement")
+        achievement_id = extract_lua_text_field(body, "achievementId")
+        demand = extract_lua_number_field(body, "demand")
+        point = extract_lua_number_field(body, "point")
+        if not achievement or not achievement_id or demand is None or point is None:
+            continue
+
+        titles = [part.strip() for part in achievement.split(",") if part.strip()]
+        male_title = titles[0] if titles else achievement
+        female_title = titles[1] if len(titles) > 1 else ""
+        achievements.append(
+            {
+                "achievement": achievement,
+                "achievementId": achievement_id,
+                "maleTitle": male_title,
+                "femaleTitle": female_title,
+                "titles": titles,
+                "demand": demand,
+                "displayOrder": demand or parse_display_order(row_key, fallback_order),
+                "point": point,
+                "type": "appearance",
+                "category": "江湖容貌",
+            }
+        )
+
+    return sorted(achievements, key=lambda item: item["demand"])
 
 
 def clean_color_codes(text: str) -> str:
@@ -508,13 +607,31 @@ def build_payload(
     )
     item_names = load_item_names(resolved_item_attr_paths)
     masks, mask_names = build_masks(mask_upgrade_text, item_names)
-    achievements = build_achievements(tujian_text, mask_names)
+    achievements = build_mask_achievements(tujian_text, mask_names)
+    token_achievements = build_token_achievements(tujian_text)
+    appearance_achievements = build_appearance_achievements(tujian_text)
+    score_achievements = achievements + token_achievements + appearance_achievements
     attach_scores(masks, achievements)
+
+    mask_achievement_total = sum(item["point"] for item in achievements)
+    token_achievement_total = sum(item["point"] for item in token_achievements)
+    appearance_achievement_total = sum(
+        item["point"] for item in appearance_achievements[:APPEARANCE_SCORE_LIMIT]
+    )
 
     return {
         "meta": {
             "maskCount": len(masks),
             "achievementCount": len(achievements),
+            "scoreAchievementCount": len(score_achievements),
+            "tokenAchievementCount": len(token_achievements),
+            "appearanceAchievementCount": len(appearance_achievements),
+            "maskAchievementTotal": mask_achievement_total,
+            "tokenAchievementTotal": token_achievement_total,
+            "appearanceAchievementTotal": appearance_achievement_total,
+            "gameMaskScoreTotal": mask_achievement_total
+            + token_achievement_total
+            + appearance_achievement_total,
             "sources": {
                 "maskUpgrade": str(Path(mask_upgrade_path)),
                 "tujian": str(Path(tujian_path)),
@@ -526,6 +643,9 @@ def build_payload(
         },
         "masks": masks,
         "achievements": achievements,
+        "scoreAchievements": score_achievements,
+        "tokenAchievements": token_achievements,
+        "appearanceAchievements": appearance_achievements,
         "servantMaterialTraits": family_special_traits,
     }
 

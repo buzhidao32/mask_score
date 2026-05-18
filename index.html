@@ -19,7 +19,7 @@
         } catch (error) {}
       })();
     </script>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260519-profile-mobile" />
   </head>
   <body>
     <button
@@ -51,7 +51,19 @@
     <main class="page">
       <section class="masthead">
         <h1>放置江湖面具分查询</h1>
-        <p class="intro">输入面具名字、称号或拼音，结果会实时显示</p>
+        <p class="page-links">
+          <a href="./inventory.html">打开我的图鉴</a>
+          <span class="profile-inline-control">
+            <label for="inventory-profile">图鉴档案</label>
+            <select id="inventory-profile" class="profile-select">
+              <option value="profile-1">档案 1</option>
+              <option value="profile-2">档案 2</option>
+              <option value="profile-3">档案 3</option>
+              <option value="profile-4">档案 4</option>
+              <option value="profile-5">档案 5</option>
+            </select>
+          </span>
+        </p>
       </section>
 
       <section class="search-area" aria-label="查询区域">
@@ -196,7 +208,7 @@
         </div>
         <div class="card-body">
           <div class="detail-block">
-            <p class="detail-label">单面具图鉴</p>
+            <p class="detail-label">单面具称号</p>
             <p class="direct-line"></p>
           </div>
           <div class="detail-block">
@@ -226,6 +238,6 @@
     </template>
 
     <script src="./vendor/pinyin-pro.js" defer></script>
-    <script src="./app.js" defer></script>
+    <script src="./app.js?v=20260519-clean-copy" defer></script>
   </body>
 </html>

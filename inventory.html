@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>我的图鉴 - 放置江湖面具分查询</title>
+    <meta
+      name="description"
+      content="本地上传图鉴截图识别称号、信物和江湖容貌，计算图鉴分差异。"
+    />
+    <link rel="icon" href="data:," />
+    <script>
+      (() => {
+        try {
+          const theme = localStorage.getItem("mask-score-theme");
+          if (theme === "light" || theme === "dark") {
+            document.documentElement.dataset.theme = theme;
+          }
+        } catch (error) {}
+      })();
+    </script>
+    <link rel="stylesheet" href="./styles.css?v=20260519-profile-mobile" />
+  </head>
+  <body class="inventory-only-page">
+    <button
+      id="theme-toggle"
+      class="theme-toggle"
+      type="button"
+      aria-label="切换为黑夜模式"
+      aria-pressed="false"
+    >
+      <span class="theme-toggle-orbit" aria-hidden="true">
+        <span class="theme-toggle-glow"></span>
+        <span class="theme-toggle-icon theme-toggle-icon-light">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path
+              d="M12 5.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0-3 1.1 2.1h-2.2L12 2.5Zm0 19 1.1-2.1h-2.2l1.1 2.1ZM4.7 4.7l2.3.7-1.6 1.6-.7-2.3Zm14.6 14.6-.7-2.3-1.6 1.6 2.3.7ZM2.5 12l2.1-1.1v2.2L2.5 12Zm19 0-2.1-1.1v2.2l2.1-1.1ZM4.7 19.3l.7-2.3 1.6 1.6-2.3.7ZM19.3 4.7l-2.3.7 1.6 1.6.7-2.3Z"
+            />
+          </svg>
+        </span>
+        <span class="theme-toggle-icon theme-toggle-icon-dark">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path
+              d="M20.2 15.2A8.2 8.2 0 0 1 8.8 3.8 8.9 8.9 0 1 0 20.2 15.2Z"
+            />
+          </svg>
+        </span>
+      </span>
+      <span id="theme-toggle-text" class="theme-toggle-text">黑夜</span>
+    </button>
+
+    <main class="page inventory-page">
+      <section class="masthead">
+        <h1>我的图鉴</h1>
+        <p class="page-links">
+          <a href="./index.html">返回面具查询</a>
+        </p>
+      </section>
+
+      <section class="inventory-panel" aria-labelledby="inventory-title">
+        <div class="panel-heading">
+          <div>
+            <h2 id="inventory-title">本地记录</h2>
+          </div>
+          <div class="heading-actions inventory-profile-actions">
+            <label class="profile-select-label" for="inventory-profile">图鉴档案</label>
+            <select id="inventory-profile" class="profile-select">
+              <option value="profile-1">档案 1</option>
+              <option value="profile-2">档案 2</option>
+              <option value="profile-3">档案 3</option>
+              <option value="profile-4">档案 4</option>
+              <option value="profile-5">档案 5</option>
+            </select>
+            <button id="reset-inventory" class="ghost-button" type="button">
+              清空记录
+            </button>
+          </div>
+        </div>
+
+        <div class="inventory-layout">
+          <div class="inventory-card upload-card">
+            <label id="upload-drop" class="upload-drop" for="screenshot-input">
+              <span>上传图鉴截图</span>
+              <small>点击选择，或把图片/文件夹拖到这里</small>
+            </label>
+            <input
+              id="screenshot-input"
+              class="file-input"
+              type="file"
+              accept="image/*"
+              multiple
+            />
+            <div class="upload-actions">
+              <button id="run-ocr" class="primary-button" type="button" disabled>
+                开始识别
+              </button>
+              <span id="ocr-status" class="inline-status">未选择图片</span>
+            </div>
+            <progress id="ocr-progress" class="ocr-progress" value="0" max="1" hidden></progress>
+          </div>
+
+        </div>
+
+        <div id="score-summary" class="score-summary" aria-live="polite"></div>
+
+        <div class="inventory-tabs">
+          <section class="inventory-card">
+            <div class="compact-form-head">
+              <h3>待确认结果</h3>
+              <button id="confirm-all" class="ghost-button" type="button" disabled>
+                全部确认
+              </button>
+            </div>
+            <div id="pending-list" class="pending-list"></div>
+          </section>
+
+          <section class="inventory-card confirmed-section">
+            <div class="compact-form-head">
+              <h3>已确认记录</h3>
+              <div class="heading-actions">
+                <span id="confirmed-count" class="pill"></span>
+                <button id="clear-confirmed" class="ghost-button" type="button" disabled>
+                  全部删除
+                </button>
+              </div>
+            </div>
+            <div id="confirmed-list" class="manual-results"></div>
+          </section>
+
+          <section class="inventory-card">
+            <h3>手动补录</h3>
+            <div class="manual-search">
+              <input
+                id="manual-query"
+                type="search"
+                placeholder="搜索称号、信物或江湖容貌称号"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </div>
+            <div id="manual-results" class="manual-results"></div>
+          </section>
+        </div>
+
+        <section class="inventory-card token-section" hidden>
+          <div class="compact-form-head">
+            <h3>信物图鉴</h3>
+            <span id="token-count" class="pill"></span>
+          </div>
+          <div id="token-list" class="token-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <div id="confirm-dialog" class="modal-backdrop" hidden>
+      <section
+        class="confirm-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        aria-describedby="confirm-dialog-message"
+      >
+        <h2 id="confirm-dialog-title">确认操作</h2>
+        <p id="confirm-dialog-message">确定执行这个操作吗？</p>
+        <div class="modal-actions">
+          <button
+            id="confirm-dialog-cancel"
+            class="ghost-button"
+            type="button"
+            data-dialog-action="cancel"
+          >
+            取消
+          </button>
+          <button
+            id="confirm-dialog-confirm"
+            class="primary-button danger-button"
+            type="button"
+            data-dialog-action="confirm"
+          >
+            确认
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"
+      defer
+    ></script>
+    <script src="./vendor/pinyin-pro.js" defer></script>
+    <script src="./app.js?v=20260519-clean-copy" defer></script>
+  </body>
+</html>
