@@ -3,8 +3,13 @@ const THEME_STORAGE_KEY = "mask-score-theme";
 const PANEL_STORAGE_KEY = "mask-score-panel-state";
 const INVENTORY_STORAGE_KEY = "mask-score-inventory-v1";
 const INVENTORY_ACTIVE_PROFILE_KEY = "mask-score-inventory-active-profile-v1";
+const OCR_FAST_MODE_STORAGE_KEY = "mask-score-ocr-fast-mode-v1";
 const INVENTORY_PROFILE_IDS = ["profile-1", "profile-2", "profile-3", "profile-4", "profile-5"];
 const APPEARANCE_SCORE_LIMIT = 12;
+const TESSERACT_VENDOR_BASE = new URL("./vendor/tesseract/", document.baseURI).href;
+const TESSDATA_VENDOR_BASE = new URL("./vendor/tessdata/", document.baseURI).href;
+const SERVICE_WORKER_URL = new URL("./sw.js?v=20260519-ocr-local16", document.baseURI).href;
+const OCR_MAX_PARALLEL_FILES = 2;
 const OCR_TITLE_ALIASES = new Map([
   ["区嫩人人太个", "茶韵悠悠"],
   ["团于伞晚", "酥手夺魄"],
@@ -21,6 +26,11 @@ const OCR_TITLE_ALIASES = new Map([
   ["亚儿子", "眉清目秀"],
   ["一一阔一", "疏狂侠少"],
   ["人公去所", "婉兮清扬"],
+  ["过分清翅", "婉兮清扬"],
+  ["巡今消疡", "婉兮清扬"],
+  ["刀今消杨", "婉兮清扬"],
+  ["妮分消扬", "婉兮清扬"],
+  ["坑分清场", "婉兮清扬"],
   ["和武刘下月", "武神下凡"],
   ["由人会人次", "神俊仙姿"],
   ["本和寺下一", "仙影重重"],
@@ -89,6 +99,12 @@ const OCR_TITLE_ALIASES = new Map([
   ["于不释疮", "手不释卷"],
   ["手不释孝", "手不释卷"],
   ["手不各卷", "手不释卷"],
+  ["忌全和仁", "仙影重重"],
+  ["瑶这出全", "飘逸出尘"],
+  ["化各阁人律", "华山首徒"],
+  ["用上映媒娟", "月映婵娟"],
+  ["小了线砍", "苍山孤鹰"],
+  ["全刀只世", "金刀驸马"],
 ]);
 const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
 const reducedMotionMedia = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -116,6 +132,10 @@ const state = {
   pendingMatches: [],
   ocrRunId: 0,
   ocrActive: false,
+  ocrFastMode: false,
+  ocrStartedAt: 0,
+  ocrTimerId: 0,
+  ocrTimerLabel: "识别中",
   confirmAction: null,
   confirmReturnFocus: null,
   defaultStatus: "",
@@ -147,7 +167,9 @@ const elements = {
   inventoryProfile: document.getElementById("inventory-profile"),
   uploadDrop: document.getElementById("upload-drop"),
   runOcrButton: document.getElementById("run-ocr"),
+  ocrFastMode: document.getElementById("ocr-fast-mode"),
   ocrStatus: document.getElementById("ocr-status"),
+  ocrTimer: document.getElementById("ocr-timer"),
   ocrProgress: document.getElementById("ocr-progress"),
   pendingList: document.getElementById("pending-list"),
   confirmAllButton: document.getElementById("confirm-all"),
@@ -184,6 +206,7 @@ init();
 
 async function init() {
   initTheme();
+  registerServiceWorker();
   bindEvents();
   if (hasSearch) {
     initResponsivePanels();
@@ -191,6 +214,10 @@ async function init() {
   if (hasSearch || hasInventory) {
     state.activeInventoryProfile = readActiveInventoryProfile();
     syncInventoryProfileControl();
+  }
+  if (hasInventory) {
+    state.ocrFastMode = readOcrFastMode();
+    syncOcrFastModeControl();
   }
   state.inventory = readInventory();
 
@@ -244,6 +271,13 @@ async function init() {
       elements.results.hidden = true;
     }
   }
+}
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator) || location.protocol === "file:") {
+    return;
+  }
+  navigator.serviceWorker.register(SERVICE_WORKER_URL).catch(() => {});
 }
 
 function bindEvents() {
@@ -309,6 +343,8 @@ function bindEvents() {
     elements.uploadDrop?.addEventListener("dragover", handleUploadDragOver);
     elements.uploadDrop?.addEventListener("dragleave", handleUploadDragLeave);
     elements.uploadDrop?.addEventListener("drop", handleUploadDrop);
+    elements.ocrFastMode?.addEventListener("change", handleOcrFastModeChange);
+    document.addEventListener("click", handleInventoryNavigationClick);
     window.addEventListener("pagehide", cancelActiveOcr);
     window.addEventListener("beforeunload", cancelActiveOcr);
     elements.runOcrButton.addEventListener("click", runOcr);
@@ -390,6 +426,58 @@ function syncInventoryProfileControl() {
   }
 }
 
+function readOcrFastMode() {
+  try {
+    return localStorage.getItem(OCR_FAST_MODE_STORAGE_KEY) === "1";
+  } catch (error) {
+    return false;
+  }
+}
+
+function writeOcrFastMode() {
+  try {
+    if (state.ocrFastMode) {
+      localStorage.setItem(OCR_FAST_MODE_STORAGE_KEY, "1");
+    } else {
+      localStorage.removeItem(OCR_FAST_MODE_STORAGE_KEY);
+    }
+  } catch (error) {}
+}
+
+function syncOcrFastModeControl() {
+  if (elements.ocrFastMode) {
+    elements.ocrFastMode.checked = state.ocrFastMode;
+  }
+}
+
+function handleOcrFastModeChange(event) {
+  const shouldEnable = Boolean(event.target.checked);
+  if (!shouldEnable) {
+    state.ocrFastMode = false;
+    writeOcrFastMode();
+    syncOcrFastModeControl();
+    if (elements.ocrStatus && !state.ocrActive) {
+      elements.ocrStatus.textContent = "已切换为稳定识别模式";
+    }
+    return;
+  }
+
+  event.target.checked = false;
+  showConfirmDialog({
+    title: "开启快速识别模式",
+    message: "快速识别模式会同时识别2张截图，占用更多CPU和内存，页面可能变卡或识别失败；识别规则不变，结果仍需要人工确认",
+    confirmText: "开启快速模式",
+    onConfirm: () => {
+      state.ocrFastMode = true;
+      writeOcrFastMode();
+      syncOcrFastModeControl();
+      if (elements.ocrStatus && !state.ocrActive) {
+        elements.ocrStatus.textContent = "已开启快速识别模式";
+      }
+    },
+  });
+}
+
 function readInventory() {
   const fallback = createEmptyInventory();
   try {
@@ -446,9 +534,23 @@ function handleInventoryProfileChange(event) {
     return;
   }
 
+  if (state.ocrActive) {
+    syncInventoryProfileControl();
+    showOcrInterruptionDialog(() => {
+      cancelActiveOcr();
+      applyInventoryProfileChange(nextProfile);
+    });
+    return;
+  }
+
+  applyInventoryProfileChange(nextProfile);
+}
+
+function applyInventoryProfileChange(nextProfile) {
   cancelActiveOcr();
   state.activeInventoryProfile = nextProfile;
   writeActiveInventoryProfile();
+  syncInventoryProfileControl();
   state.inventory = readInventory();
   state.pendingMatches = [];
   state.selectedFiles = [];
@@ -564,6 +666,40 @@ function handleConfirmDialogKeydown(event) {
     event.preventDefault();
     closeConfirmDialog();
   }
+}
+
+function handleInventoryNavigationClick(event) {
+  if (!state.ocrActive) {
+    return;
+  }
+
+  const link = event.target.closest("a[href]");
+  if (!link || link.target || link.hasAttribute("download")) {
+    return;
+  }
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+    return;
+  }
+
+  const nextUrl = new URL(link.getAttribute("href"), window.location.href);
+  if (nextUrl.href === window.location.href || nextUrl.origin !== window.location.origin) {
+    return;
+  }
+
+  event.preventDefault();
+  showOcrInterruptionDialog(() => {
+    cancelActiveOcr();
+    window.location.href = nextUrl.href;
+  });
+}
+
+function showOcrInterruptionDialog(onConfirm) {
+  showConfirmDialog({
+    title: "识别将中断",
+    message: "正在识别图鉴截图。离开当前页面会中断识别，再次识别时需要重新上传图片",
+    confirmText: "离开并中断",
+    onConfirm,
+  });
 }
 
 function buildIndices() {
@@ -1669,6 +1805,7 @@ function cancelActiveOcr() {
   }
   state.ocrRunId += 1;
   state.ocrActive = false;
+  stopOcrTimer("识别已取消");
 }
 
 function assertOcrRunActive(runId) {
@@ -1697,38 +1834,51 @@ async function runOcr() {
   const newMatches = [];
   const gameTotalCandidates = [];
   const skippedFiles = [];
-  let ocrSession = null;
+  const ocrSessions = [];
+  const fileProgress = new Array(state.selectedFiles.length).fill(0);
+  const concurrency = getAdaptiveOcrConcurrency(state.selectedFiles.length);
+  const runningFileNames = new Map();
+  let nextFileIndex = 0;
+  let completedFiles = 0;
+  let slotError = null;
+  startOcrTimer();
 
-  try {
-    ocrSession = createOcrSession({
-      shouldCancel: () => runId !== state.ocrRunId || !state.ocrActive,
-    });
-    for (let index = 0; index < state.selectedFiles.length; index += 1) {
-      assertOcrRunActive(runId);
-      const file = state.selectedFiles[index];
-      elements.ocrStatus.textContent = `正在识别 ${index + 1}/${state.selectedFiles.length}：${file.name}`;
-      let maxFileProgress = 0;
-      const updateFileProgress = (fileProgress) => {
-        maxFileProgress = Math.max(maxFileProgress, clampNumber(fileProgress, 0, 1));
-        elements.ocrProgress.value =
-          (index + maxFileProgress) / state.selectedFiles.length;
-      };
+  const setFileProgress = (index, progress) => {
+    fileProgress[index] = Math.max(
+      fileProgress[index] || 0,
+      clampNumber(progress, 0, 1),
+    );
+    elements.ocrProgress.value =
+      fileProgress.reduce((sum, value) => sum + value, 0) / state.selectedFiles.length;
+  };
+
+  const processFile = async (index, ocrSession) => {
+    assertOcrRunActive(runId);
+    const file = state.selectedFiles[index];
+    runningFileNames.set(index, file.name);
+    elements.ocrStatus.textContent = getOcrRunningStatus(
+      completedFiles,
+      state.selectedFiles.length,
+      concurrency,
+      Array.from(runningFileNames.values()),
+    );
+    try {
       const screenshotLayout = await inspectAchievementScreenshot(file);
       if (isDefiniteUnsupportedOcrScreenshot(screenshotLayout)) {
         skippedFiles.push(file.name);
-        updateFileProgress(1);
-        continue;
+        setFileProgress(index, 1);
+        return;
       }
 
       const [gameTotal, rows] = await Promise.all([
         recognizeGameTotalFromFile(file, {
           ocrSession,
-          onProgress: (progress) => updateFileProgress(progress * 0.16),
+          onProgress: (progress) => setFileProgress(index, progress * 0.16),
           shouldCancel: () => runId !== state.ocrRunId || !state.ocrActive,
         }),
         recognizeAchievementRowsFast(file, {
           ocrSession,
-          onProgress: (progress) => updateFileProgress(0.16 + progress * 0.84),
+          onProgress: (progress) => setFileProgress(index, 0.16 + progress * 0.84),
           shouldCancel: () => runId !== state.ocrRunId || !state.ocrActive,
         }),
       ]);
@@ -1740,12 +1890,46 @@ async function runOcr() {
       };
       if (!isSupportedAchievementOcrScreenshot(screenshotLayout, gameTotal, rows)) {
         skippedFiles.push(file.name);
-        continue;
+        setFileProgress(index, 1);
+        return;
       }
       if (gameTotal !== null) {
         gameTotalCandidates.push(gameTotal);
       }
       newMatches.push(...matchOcrText(ocrPayload, file.name));
+      setFileProgress(index, 1);
+    } finally {
+      runningFileNames.delete(index);
+    }
+  };
+
+  const runSlot = async () => {
+    const ocrSession = createOcrSession({
+      shouldCancel: () => runId !== state.ocrRunId || !state.ocrActive,
+    });
+    ocrSessions.push(ocrSession);
+    try {
+      while (nextFileIndex < state.selectedFiles.length) {
+        assertOcrRunActive(runId);
+        const index = nextFileIndex;
+        nextFileIndex += 1;
+        await processFile(index, ocrSession);
+        completedFiles += 1;
+      }
+    } catch (error) {
+      slotError ||= error;
+      if (runId === state.ocrRunId) {
+        state.ocrActive = false;
+      }
+    }
+  };
+
+  try {
+    await Promise.allSettled(
+      Array.from({ length: concurrency }, () => runSlot()),
+    );
+    if (slotError) {
+      throw slotError;
     }
 
     assertOcrRunActive(runId);
@@ -1762,18 +1946,105 @@ async function runOcr() {
     elements.ocrStatus.textContent = newMatches.length
       ? `识别完成，待确认 ${state.pendingMatches.length} 条${skippedText}`
       : `识别完成，未匹配到可确认条目${skippedText}`;
+    stopOcrTimer("识别完成");
   } catch (error) {
     state.inventory.lastGameTotal = previousGameTotal;
     elements.ocrStatus.textContent =
       error.message === "识别已取消" ? "识别已取消" : `识别失败：${error.message}`;
+    stopOcrTimer(error.message === "识别已取消" ? "识别已取消" : "识别失败");
   } finally {
-    await ocrSession?.terminate();
+    await Promise.all(ocrSessions.map((session) => session.terminate().catch(() => {})));
     if (runId === state.ocrRunId) {
       state.ocrActive = false;
     }
     elements.runOcrButton.disabled = state.selectedFiles.length === 0;
     renderInventory();
   }
+}
+
+function getAdaptiveOcrConcurrency(fileCount) {
+  if (!state.ocrFastMode || fileCount < 2) {
+    return 1;
+  }
+
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (connection?.saveData) {
+    return 1;
+  }
+
+  const memory = Number(navigator.deviceMemory) || 0;
+  const cores = Number(navigator.hardwareConcurrency) || 0;
+  const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
+  if (isMobile || (memory && memory < 6) || (cores && cores < 8)) {
+    return 1;
+  }
+
+  if ((memory >= 8 && cores >= 8) || (!memory && cores >= 8)) {
+    return OCR_MAX_PARALLEL_FILES;
+  }
+
+  return 1;
+}
+
+function getOcrRunningStatus(completed, total, concurrency, fileNames) {
+  const mode = concurrency > 1 ? `，快速识别，并行 ${concurrency} 张` : "";
+  const runningNames = Array.isArray(fileNames) ? fileNames : [fileNames].filter(Boolean);
+  const names = runningNames.length ? `：${runningNames.join("、")}` : "";
+  return `正在识别 ${Math.min(completed + 1, total)}/${total}${mode}${names}`;
+}
+
+function startOcrTimer() {
+  state.ocrStartedAt = Date.now();
+  state.ocrTimerLabel = "识别中";
+  updateOcrTimer();
+  if (state.ocrTimerId) {
+    window.clearTimeout(state.ocrTimerId);
+  }
+  scheduleOcrTimerTick();
+}
+
+function stopOcrTimer(label) {
+  if (state.ocrTimerId) {
+    window.clearTimeout(state.ocrTimerId);
+    state.ocrTimerId = 0;
+  }
+  state.ocrTimerLabel = label;
+  updateOcrTimer();
+}
+
+function scheduleOcrTimerTick() {
+  if (!state.ocrStartedAt || !state.ocrActive) {
+    return;
+  }
+  const elapsed = Date.now() - state.ocrStartedAt;
+  const delay = Math.max(120, 1000 - (elapsed % 1000));
+  state.ocrTimerId = window.setTimeout(() => {
+    updateOcrTimer();
+    scheduleOcrTimerTick();
+  }, delay);
+}
+
+function updateOcrTimer() {
+  if (!elements.ocrTimer) {
+    return;
+  }
+  if (!state.ocrStartedAt) {
+    elements.ocrTimer.hidden = true;
+    elements.ocrTimer.textContent = "";
+    return;
+  }
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - state.ocrStartedAt) / 1000));
+  elements.ocrTimer.textContent = `${state.ocrTimerLabel} ${formatDuration(elapsedSeconds)}`;
+  elements.ocrTimer.hidden = false;
+}
+
+function formatDuration(totalSeconds) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) {
+    return `${seconds} 秒`;
+  }
+  return `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒`;
 }
 
 function inspectAchievementScreenshot(file) {
@@ -1890,11 +2161,29 @@ async function recognizeGameTotalFromFile(file, options = {}) {
   const texts = [];
   for (let index = 0; index < crops.length; index += 1) {
     throwIfOcrCancelled(options.shouldCancel);
-    const text = await recognizeOcrSource(crops[index], "chi_sim+eng", {
-      tessedit_pageseg_mode: "7",
-    });
+    const isFastNumberPass = index < 2;
+    const text = await recognizeOcrSource(
+      crops[index],
+      isFastNumberPass ? "eng" : "chi_sim+eng",
+      isFastNumberPass
+        ? {
+            tessedit_pageseg_mode: "7",
+            tessedit_char_whitelist: "0123456789",
+          }
+        : {
+            tessedit_pageseg_mode: "7",
+          },
+      options.ocrSession,
+    );
     throwIfOcrCancelled(options.shouldCancel);
     texts.push(text);
+    if (isFastNumberPass) {
+      const total = detectGameTotalFromHeader(texts.join("\n"));
+      if (total !== null) {
+        options.onProgress?.(1);
+        return total;
+      }
+    }
     options.onProgress?.((index + 1) / Math.max(crops.length, 1));
   }
   return detectGameTotalFromHeader(texts.join("\n"));
@@ -1909,17 +2198,29 @@ async function recognizeAchievementRowsFast(file, options = {}) {
     text: "",
   }));
 
-  const primaryJobs = sourceRows.flatMap((row, rowIndex) =>
-    (row.primaryTitleSources || row.titleSources.slice(0, 1)).map((source) => ({
-      rowIndex,
-      source,
-    })),
-  );
-  await recognizeRowSourceJobs(primaryJobs, rows, {
+  await recognizeRowStrip(sourceRows, rows, {
     ...options,
     progressStart: 0,
-    progressWeight: 0.62,
+    progressWeight: 0.32,
   });
+
+  const primarySelected = selectOrderedRowMatches(rows);
+  const primaryJobs = sourceRows.flatMap((row, rowIndex) => {
+    if (!shouldRunFallbackRowOcr(primarySelected.get(rowIndex))) {
+      return [];
+    }
+    return (row.primaryTitleSources || row.titleSources.slice(0, 1)).map((source) => ({
+      rowIndex,
+      source,
+    }));
+  });
+  if (primaryJobs.length) {
+    await recognizeRowSourceJobs(primaryJobs, rows, {
+      ...options,
+      progressStart: 0.32,
+      progressWeight: 0.3,
+    });
+  }
 
   const selected = selectOrderedRowMatches(rows);
   const fallbackJobs = sourceRows.flatMap((row, rowIndex) => {
@@ -1944,6 +2245,93 @@ async function recognizeAchievementRowsFast(file, options = {}) {
   }
 
   return rows.sort((left, right) => left.index - right.index);
+}
+
+async function recognizeRowStrip(sourceRows, rows, options = {}) {
+  const sources = sourceRows.map(
+    (row) => (row.primaryTitleSources || row.titleSources || [])[0] || null,
+  );
+  if (!sources.filter(Boolean).length) {
+    options.onProgress?.(options.progressStart || 0);
+    return;
+  }
+
+  try {
+    const strip = await createOcrStripImage(sources);
+    if (!strip) {
+      options.onProgress?.(options.progressStart || 0);
+      return;
+    }
+    throwIfOcrCancelled(options.shouldCancel);
+    const text = await recognizeOcrSource(strip, "chi_sim", {
+      tessedit_pageseg_mode: "6",
+    }, options.ocrSession);
+    throwIfOcrCancelled(options.shouldCancel);
+    const lines = splitStripOcrLines(text, rows.length);
+    if (lines.length === rows.length) {
+      lines.forEach((line, index) => {
+        if (line && rows[index]) {
+          appendOcrRowText(rows[index], line);
+        }
+      });
+    }
+  } catch (error) {
+    if (error.message === "识别已取消") {
+      throw error;
+    }
+  }
+  options.onProgress?.((options.progressStart || 0) + (options.progressWeight || 1));
+}
+
+async function createOcrStripImage(sources) {
+  const images = await Promise.all(
+    sources.map((source) => (source ? loadImageSource(source).catch(() => null) : null)),
+  );
+  const validImages = images.filter(Boolean);
+  if (!validImages.length) {
+    return null;
+  }
+
+  const padding = 12;
+  const gap = 18;
+  const rowWidth = Math.max(...validImages.map((image) => image.width));
+  const rowHeight = Math.max(...validImages.map((image) => image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = rowWidth + padding * 2;
+  canvas.height = sources.length * rowHeight + Math.max(0, sources.length - 1) * gap + padding * 2;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  images.forEach((image, index) => {
+    if (!image) {
+      return;
+    }
+    const y = padding + index * (rowHeight + gap) + Math.round((rowHeight - image.height) / 2);
+    context.drawImage(image, padding, y);
+  });
+
+  return canvas.toDataURL("image/png");
+}
+
+function loadImageSource(source) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("图片预处理失败"));
+    image.src = source;
+  });
+}
+
+function splitStripOcrLines(text, expectedCount) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ""))
+    .filter((line) => /[\u3400-\u9fff]/.test(line));
+  if (!lines.length || expectedCount <= 0) {
+    return [];
+  }
+  return lines;
 }
 
 async function recognizeRowSourceJobs(jobs, rows, options = {}) {
@@ -1973,11 +2361,18 @@ function createOcrSession(options = {}) {
       if (!pendingWorkers.has(language)) {
         pendingWorkers.set(
           language,
-          window.Tesseract.createWorker(language).then((worker) => {
-            workers.set(language, worker);
-            pendingWorkers.delete(language);
-            return worker;
-          }),
+          window.Tesseract
+            .createWorker(language, 1, {
+              workerPath: new URL("worker.min.js", TESSERACT_VENDOR_BASE).href,
+              corePath: TESSERACT_VENDOR_BASE,
+              langPath: TESSDATA_VENDOR_BASE,
+              gzip: true,
+            })
+            .then((worker) => {
+              workers.set(language, worker);
+              pendingWorkers.delete(language);
+              return worker;
+            }),
         );
       }
       await pendingWorkers.get(language);
@@ -2142,6 +2537,26 @@ function preprocessGameTotalCrops(file) {
         canvas.height = image.height;
         const context = canvas.getContext("2d", { willReadFrequently: true });
         context.drawImage(image, 0, 0);
+        const numberCrops = [
+          {
+            x: Math.round(image.width * 0.69),
+            y: Math.round(image.height * 0.13),
+            width: Math.round(image.width * 0.29),
+            height: Math.round(image.height * 0.085),
+          },
+          {
+            x: Math.round(image.width * 0.75),
+            y: Math.round(image.height * 0.145),
+            width: Math.round(image.width * 0.22),
+            height: Math.round(image.height * 0.07),
+          },
+          {
+            x: Math.round(image.width * 0.78),
+            y: Math.round(image.height * 0.16),
+            width: Math.round(image.width * 0.18),
+            height: Math.round(image.height * 0.045),
+          },
+        ];
         const crops = [
           {
             x: Math.round(image.width * 0.66),
@@ -2157,15 +2572,25 @@ function preprocessGameTotalCrops(file) {
           })),
         ];
         resolve(
-          crops.flatMap((crop) =>
-            [118, 142].map((threshold) =>
+          [
+            ...numberCrops.flatMap((crop) => [
+              createGreenNumberCropOcrImage(context, crop, { scale: 8 }),
               createSingleCropOcrImage(context, crop, {
-                scale: 5,
-                threshold,
+                scale: 7,
+                threshold: 112,
                 mode: "light",
               }),
+            ]),
+            ...crops.flatMap((crop) =>
+              [118, 142].map((threshold) =>
+                createSingleCropOcrImage(context, crop, {
+                  scale: 5,
+                  threshold,
+                  mode: "light",
+                }),
+              ),
             ),
-          ),
+          ],
         );
       };
       image.src = reader.result;
@@ -2573,6 +2998,53 @@ function createSingleCropOcrImage(sourceContext, crop, options = {}) {
   return output.toDataURL("image/png");
 }
 
+function createGreenNumberCropOcrImage(sourceContext, crop, options = {}) {
+  const scale = options.scale || 6;
+  const padding = Math.round(10 * scale);
+  const output = document.createElement("canvas");
+  output.width = Math.round(crop.width * scale) + padding * 2;
+  output.height = Math.round(crop.height * scale) + padding * 2;
+  const outputContext = output.getContext("2d", { willReadFrequently: true });
+  outputContext.fillStyle = "#fff";
+  outputContext.fillRect(0, 0, output.width, output.height);
+
+  const scratch = document.createElement("canvas");
+  scratch.width = Math.round(crop.width * scale);
+  scratch.height = Math.round(crop.height * scale);
+  const scratchContext = scratch.getContext("2d", { willReadFrequently: true });
+  scratchContext.imageSmoothingEnabled = true;
+  scratchContext.drawImage(
+    sourceContext.canvas,
+    crop.x,
+    crop.y,
+    crop.width,
+    crop.height,
+    0,
+    0,
+    scratch.width,
+    scratch.height,
+  );
+  const imageData = scratchContext.getImageData(0, 0, scratch.width, scratch.height);
+  const data = imageData.data;
+  for (let index = 0; index < data.length; index += 4) {
+    const red = data[index];
+    const green = data[index + 1];
+    const blue = data[index + 2];
+    const isGreenDigit =
+      green >= 95 &&
+      green > red * 1.15 &&
+      green > blue * 1.08 &&
+      green - Math.max(red, blue) >= 18;
+    const value = isGreenDigit ? 0 : 255;
+    data[index] = value;
+    data[index + 1] = value;
+    data[index + 2] = value;
+  }
+  scratchContext.putImageData(imageData, 0, 0);
+  outputContext.drawImage(scratch, padding, padding);
+  return output.toDataURL("image/png");
+}
+
 function createGrayCropOcrImage(sourceContext, crop, options = {}) {
   const scale = options.scale || 4;
   const padding = Math.round(10 * scale);
@@ -2708,8 +3180,7 @@ function detectGameTotal(text) {
   const normalized = compact.replace(/[效教敌放族]/g, "数");
   const labeled = normalized.match(/(?:总分|面具分|图鉴分|成就点数|点数)[^0-9OoAa]{0,10}([0-9OoAa]{3,5})/);
   if (labeled) {
-    const value = normalizeOcrNumber(labeled[1]);
-    return isValidGameTotal(value) ? value : null;
+    return getValidGameTotalNumbers(labeled[1])[0] ?? null;
   }
 
   return null;
@@ -2722,13 +3193,30 @@ function detectGameTotalFromHeader(text) {
     return direct;
   }
   const numbers = Array.from(compact.matchAll(/[0-9OoAa]{3,5}/g))
-    .map((match) => normalizeOcrNumber(match[0]))
-    .filter(isValidGameTotal);
+    .flatMap((match) => getValidGameTotalNumbers(match[0]));
   return numbers[0] ?? null;
 }
 
 function normalizeOcrNumber(value) {
   return Number(String(value || "").replace(/[Oo]/g, "0").replace(/[Aa]/g, "8"));
+}
+
+function getValidGameTotalNumbers(value) {
+  const raw = String(value || "").replace(/[Oo]/g, "0").replace(/[Aa]/g, "8");
+  const candidates = [];
+  const normalized = Number(raw);
+  if (isValidGameTotal(normalized)) {
+    candidates.push(normalized);
+  }
+  if (raw.length === 5) {
+    [2, 1, 3, 0, 4].forEach((index) => {
+      const repaired = Number(raw.slice(0, index) + raw.slice(index + 1));
+      if (isValidGameTotal(repaired)) {
+        candidates.push(repaired);
+      }
+    });
+  }
+  return [...new Set(candidates)];
 }
 
 function isValidGameTotal(value) {
@@ -2748,8 +3236,7 @@ function selectGameTotalCandidate(values) {
     return null;
   }
 
-  return Array.from(counts, ([value, count]) => ({ value, count }))
-    .sort((left, right) => right.count - left.count || right.value - left.value)[0].value;
+  return Math.max(...counts.keys());
 }
 
 function matchOcrText(text, sourceName) {
