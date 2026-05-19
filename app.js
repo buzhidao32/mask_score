@@ -8,7 +8,7 @@ const INVENTORY_PROFILE_IDS = ["profile-1", "profile-2", "profile-3", "profile-4
 const APPEARANCE_SCORE_LIMIT = 12;
 const TESSERACT_VENDOR_BASE = new URL("./vendor/tesseract/", document.baseURI).href;
 const TESSDATA_VENDOR_BASE = new URL("./vendor/tessdata/", document.baseURI).href;
-const SERVICE_WORKER_URL = new URL("./sw.js?v=20260519-ocr-local16", document.baseURI).href;
+const SERVICE_WORKER_URL = new URL("./sw.js?v=20260519-ocr-local18", document.baseURI).href;
 const OCR_MAX_PARALLEL_FILES = 2;
 const OCR_TITLE_ALIASES = new Map([
   ["区嫩人人太个", "茶韵悠悠"],
@@ -339,6 +339,8 @@ function bindEvents() {
     elements.inventoryProfile?.addEventListener("change", handleInventoryProfileChange);
     window.addEventListener("storage", handleInventoryStorageChange);
     elements.screenshotInput.addEventListener("change", handleFileSelection);
+    elements.screenshotInput.addEventListener("click", prepareScreenshotPicker);
+    elements.uploadDrop?.addEventListener("click", prepareScreenshotPicker);
     elements.uploadDrop?.addEventListener("dragenter", handleUploadDragEnter);
     elements.uploadDrop?.addEventListener("dragover", handleUploadDragOver);
     elements.uploadDrop?.addEventListener("dragleave", handleUploadDragLeave);
@@ -1662,21 +1664,46 @@ function toggleAchievement(achievementId) {
   refreshCurrentResults();
 }
 
+function prepareScreenshotPicker() {
+  if (elements.screenshotInput) {
+    elements.screenshotInput.value = "";
+  }
+}
+
 function handleFileSelection(event) {
-  setSelectedFiles(Array.from(event.target.files || []));
+  const files = Array.from(event.target.files || []);
+  if (!files.length) {
+    if (!state.selectedFiles.length) {
+      elements.ocrStatus.textContent = "未选择图片";
+      elements.runOcrButton.disabled = true;
+    }
+    return;
+  }
+  setSelectedFiles(files);
 }
 
 function setSelectedFiles(files) {
-  state.ocrRunId += 1;
-  state.ocrActive = false;
-  state.selectedFiles = files
+  const selectedFiles = Array.isArray(files) ? files : [];
+  const imageFiles = selectedFiles
     .filter((file) => isImageFile(file))
     .sort(compareDroppedFiles);
-  state.inventory.lastGameTotal = 0;
+  const ignoredCount = selectedFiles.length - imageFiles.length;
+  state.ocrRunId += 1;
+  state.ocrActive = false;
+  state.selectedFiles = imageFiles;
+  if (state.selectedFiles.length) {
+    state.inventory.lastGameTotal = 0;
+  }
   elements.runOcrButton.disabled = state.selectedFiles.length === 0;
-  elements.ocrStatus.textContent = state.selectedFiles.length
-    ? `已选择 ${state.selectedFiles.length} 张图片`
-    : "未选择图片";
+  if (state.selectedFiles.length) {
+    elements.ocrStatus.textContent = ignoredCount
+      ? `已选择 ${state.selectedFiles.length} 张图片，已忽略 ${ignoredCount} 个非图片文件`
+      : `已选择 ${state.selectedFiles.length} 张图片`;
+  } else if (selectedFiles.length) {
+    elements.ocrStatus.textContent = "未读取到可识别图片，请改选截图原图";
+  } else {
+    elements.ocrStatus.textContent = "未选择图片";
+  }
   elements.uploadDrop?.classList.remove("is-drag-over");
   renderInventory();
 }
@@ -1713,7 +1740,21 @@ async function handleUploadDrop(event) {
 }
 
 function isImageFile(file) {
-  return /^image\//i.test(file?.type || "") || /\.(jpe?g|png|webp|bmp)$/i.test(file?.name || "");
+  if (!file) {
+    return false;
+  }
+  const type = String(file.type || "").toLowerCase();
+  const name = String(file.name || "");
+  if (/^image\//i.test(type)) {
+    return true;
+  }
+  if (/\.(jpe?g|png|webp|bmp|gif|avif|heic|heif)$/i.test(name)) {
+    return true;
+  }
+  if (/\.[a-z0-9]{1,8}$/i.test(name)) {
+    return false;
+  }
+  return !type || type === "application/octet-stream" || type === "binary/octet-stream";
 }
 
 function compareDroppedFiles(left, right) {
@@ -1834,6 +1875,7 @@ async function runOcr() {
   const newMatches = [];
   const gameTotalCandidates = [];
   const skippedFiles = [];
+  const unreadableFiles = [];
   const ocrSessions = [];
   const fileProgress = new Array(state.selectedFiles.length).fill(0);
   const concurrency = getAdaptiveOcrConcurrency(state.selectedFiles.length);
@@ -1864,6 +1906,11 @@ async function runOcr() {
     );
     try {
       const screenshotLayout = await inspectAchievementScreenshot(file);
+      if (screenshotLayout.decodeFailed) {
+        unreadableFiles.push(file.name || "未命名图片");
+        setFileProgress(index, 1);
+        return;
+      }
       if (isDefiniteUnsupportedOcrScreenshot(screenshotLayout)) {
         skippedFiles.push(file.name);
         setFileProgress(index, 1);
@@ -1940,9 +1987,14 @@ async function runOcr() {
     addPendingMatches(newMatches);
     writeInventory();
     elements.ocrProgress.value = 1;
-    const skippedText = skippedFiles.length
-      ? `，已跳过 ${skippedFiles.length} 张非已激活图鉴截图`
-      : "";
+    const statusNotes = [];
+    if (skippedFiles.length) {
+      statusNotes.push(`已跳过 ${skippedFiles.length} 张非图鉴截图`);
+    }
+    if (unreadableFiles.length) {
+      statusNotes.push(`${unreadableFiles.length} 张图片浏览器无法读取`);
+    }
+    const skippedText = statusNotes.length ? `，${statusNotes.join("，")}` : "";
     elements.ocrStatus.textContent = newMatches.length
       ? `识别完成，待确认 ${state.pendingMatches.length} 条${skippedText}`
       : `识别完成，未匹配到可确认条目${skippedText}`;
@@ -2051,6 +2103,7 @@ function inspectAchievementScreenshot(file) {
   return new Promise((resolve) => {
     const fallback = {
       isPortrait: false,
+      decodeFailed: false,
       centerRedRatio: 0,
       leftRedRatio: 0,
       rightRedRatio: 0,
@@ -2058,10 +2111,10 @@ function inspectAchievementScreenshot(file) {
       hasOffCenterActiveTab: false,
     };
     const reader = new FileReader();
-    reader.onerror = () => resolve(fallback);
+    reader.onerror = () => resolve({ ...fallback, decodeFailed: true });
     reader.onload = () => {
       const image = new Image();
-      image.onerror = () => resolve(fallback);
+      image.onerror = () => resolve({ ...fallback, decodeFailed: true });
       image.onload = () => {
         if (!image.width || !image.height) {
           resolve(fallback);
@@ -2149,11 +2202,7 @@ function isSupportedAchievementOcrScreenshot(layout, gameTotal, rows) {
   if (!layout?.isPortrait) {
     return false;
   }
-  if (layout.hasCenterActiveTab) {
-    return true;
-  }
-  const rowCount = Array.isArray(rows) ? rows.length : 0;
-  return gameTotal !== null && rowCount >= 2 && !layout.hasOffCenterActiveTab;
+  return !layout.hasOffCenterActiveTab;
 }
 
 async function recognizeGameTotalFromFile(file, options = {}) {
@@ -3295,7 +3344,7 @@ function matchOcrText(text, sourceName) {
         kind: achievement.type === "token" ? "token" : "achievement",
         id: achievement.achievementId,
         title: achievement.achievement,
-        meta: `${getAchievementKindText(achievement)} · 命中“${scoredHit}”`,
+        meta: getAchievementKindText(achievement),
         point: Number(achievement.point) || 0,
       });
     }
@@ -3311,7 +3360,7 @@ function matchOcrText(text, sourceName) {
       ),
     );
     if (hit) {
-      matches.push(createAppearanceMatch(appearance, hit, `命中“${hit}”`));
+      matches.push(createAppearanceMatch(appearance, hit, ""));
     }
   });
 
@@ -3532,7 +3581,10 @@ function createMatchFromRowCandidate(candidate) {
     kind: candidate.kind,
     id: candidate.id,
     title: candidate.title,
-    meta: `${getAchievementKindText(candidate.item)} · ${createRowMatchDetail(candidate)}`,
+    meta: formatPendingMatchMeta(
+      getAchievementKindText(candidate.item),
+      createRowMatchDetail(candidate),
+    ),
     point: Number(candidate.point) || 0,
     order: Number(candidate.order),
   };
@@ -3612,6 +3664,8 @@ function fillSequentialContextMatches(rows, selected) {
         displayRows[candidate.displayIndex + offset],
         rows[rowIndex + offset],
         displayIndexByKey,
+        false,
+        getAppearanceColumnFromPair(candidate, next[1]),
       );
     }
   });
@@ -3632,6 +3686,8 @@ function fillSequentialContextMatches(rows, selected) {
         displayRows[displayIndex],
         rows[rowIndex],
         displayIndexByKey,
+        false,
+        getAppearanceTitleColumn(firstPair[0][1].item, firstPair[0][1].title),
       );
     }
   }
@@ -3653,6 +3709,8 @@ function fillSequentialContextMatches(rows, selected) {
         displayRows[displayIndex],
         rows[rowIndex],
         displayIndexByKey,
+        false,
+        getAppearanceTitleColumn(lastPair[1][1].item, lastPair[1][1].title),
       );
     }
   }
@@ -3696,6 +3754,7 @@ function replaceLowConfidenceSequentialEdges(
           candidate,
           displayRows[expectedIndex],
           displayIndexByKey,
+          getAppearanceTitleColumn(previousPair[1][1].item, previousPair[1][1].title),
         )
       ) {
         return;
@@ -3717,6 +3776,7 @@ function replaceLowConfidenceSequentialEdges(
         candidate,
         displayRows[expectedIndex],
         displayIndexByKey,
+        getAppearanceTitleColumn(nextPair[0][1].item, nextPair[0][1].title),
       );
     }
   });
@@ -3729,6 +3789,7 @@ function replaceSequentialCandidateIfBetter(
   candidate,
   displayRow,
   displayIndexByKey,
+  appearanceColumn = "",
 ) {
   if (
     !displayRow ||
@@ -3742,7 +3803,13 @@ function replaceSequentialCandidateIfBetter(
   const normalizedRow = normalizeTextKey(
     rows[rowIndex]?.titleText || rows[rowIndex]?.text || "",
   );
-  if (countSharedCharacters(normalizedRow, normalizeTextKey(displayRow.title)) < 2) {
+  const displayTitleKeys =
+    displayRow.kind === "appearance" && Array.isArray(displayRow.item?.titles)
+      ? displayRow.item.titles.map((title) => normalizeTextKey(title))
+      : [normalizeTextKey(displayRow.title)];
+  if (
+    !displayTitleKeys.some((titleKey) => countSharedCharacters(normalizedRow, titleKey) >= 2)
+  ) {
     return false;
   }
 
@@ -3753,6 +3820,7 @@ function replaceSequentialCandidateIfBetter(
     rows[rowIndex],
     displayIndexByKey,
     true,
+    appearanceColumn,
   );
   return true;
 }
@@ -3764,6 +3832,7 @@ function addInferredSequentialMatch(
   sourceRow,
   displayIndexByKey,
   allowReplace = false,
+  appearanceColumn = "",
 ) {
   if (
     !displayRow ||
@@ -3775,6 +3844,15 @@ function addInferredSequentialMatch(
   }
   selected.set(rowIndex, {
     ...displayRow,
+    title:
+      displayRow.kind === "appearance"
+        ? getAppearanceDisplayTitleFromRow(
+            displayRow.item,
+            sourceRow,
+            displayRow.title,
+            appearanceColumn,
+          )
+        : displayRow.title,
     rowIndex,
     displayIndex: displayIndexByKey.get(`${displayRow.kind}:${displayRow.id}`),
     rank: 6,
@@ -3789,14 +3867,17 @@ function addInferredSequentialMatch(
 
 function canInferSequentialMatchFromRow(row, displayRow) {
   const normalizedRow = normalizeTextKey(row?.titleText || row?.text || "");
-  const normalizedTitle = normalizeTextKey(displayRow?.title || "");
-  if (!normalizedTitle) {
+  const normalizedTitles =
+    displayRow?.kind === "appearance" && Array.isArray(displayRow.item?.titles)
+      ? displayRow.item.titles.map((title) => normalizeTextKey(title)).filter(Boolean)
+      : [normalizeTextKey(displayRow?.title || "")].filter(Boolean);
+  if (!normalizedTitles.length) {
     return false;
   }
   if (normalizedRow.length < 2) {
     return Number(row?.visibility) >= 0.75;
   }
-  return countSharedCharacters(normalizedRow, normalizedTitle) >= 2;
+  return normalizedTitles.some((titleKey) => countSharedCharacters(normalizedRow, titleKey) >= 2);
 }
 
 function hasUsableRowText(row) {
@@ -4017,7 +4098,7 @@ function createRowMatchDetail(match) {
   if (match.distance > 0 || match.rank >= 3) {
     return "低置信，需确认";
   }
-  return "分数取本站数据";
+  return "";
 }
 
 function extractBestUnmatchedRowCandidate(rowText) {
@@ -4300,10 +4381,14 @@ function createAppearanceMatch(appearance, title, detail) {
     kind: "appearance",
     id: appearance.achievementId,
     title,
-    meta: `江湖容貌 · ${detail}`,
+    meta: formatPendingMatchMeta("江湖容貌", detail),
     point: Number(appearance.point) || 0,
     order: getKnownRowOrder(appearance, 0, "appearance"),
   };
+}
+
+function formatPendingMatchMeta(kind, detail = "") {
+  return detail ? `${kind} · ${detail}` : kind;
 }
 
 function isLikelyOcrTitleMatch(
@@ -4955,10 +5040,92 @@ function getInventoryAchievementLine(achievement, title = "") {
 }
 
 function getInventoryListTitleLine(achievement, title = "") {
-  const displayTitle = title || getAchievementTitle(achievement);
+  const displayTitle =
+    achievement?.type === "appearance"
+      ? getSingleAppearanceDisplayTitle(achievement, title)
+      : title || getAchievementTitle(achievement);
   const names =
     achievement?.type === "combo" ? getInventoryAchievementDemandText(achievement) : "";
   return names ? `${displayTitle} · ${names}` : displayTitle;
+}
+
+function getSingleAppearanceDisplayTitle(achievement, title = "") {
+  if (!achievement || achievement.type !== "appearance") {
+    return title || getAchievementTitle(achievement);
+  }
+  const cleanTitle = String(title || "").trim();
+  const titles = getAppearanceSingleTitles(achievement);
+  if (cleanTitle && !/[，,/]/.test(cleanTitle)) {
+    return cleanTitle;
+  }
+  const exact = titles.find((item) => cleanTitle.includes(item));
+  return exact || achievement.femaleTitle || achievement.maleTitle || cleanTitle || achievement.achievement;
+}
+
+function getAppearanceDisplayTitleFromRow(
+  appearance,
+  row,
+  fallbackTitle = "",
+  preferredColumn = "",
+) {
+  const preferredTitle = getAppearanceTitleByColumn(appearance, preferredColumn);
+  const rowText = String(row?.titleText || row?.text || "");
+  const normalizedRow = normalizeTextKey(rowText);
+  const candidates = extractOcrNameCandidates(rowText);
+  const titles = getAppearanceSingleTitles(appearance);
+  const exact = titles.find((title) => {
+    const key = normalizeTextKey(title);
+    return normalizedRow.includes(key) ||
+      candidates.some((candidate) => normalizeTextKey(candidate) === key);
+  });
+  if (exact) {
+    return exact;
+  }
+  const fuzzy = titles.find((title) =>
+    isLikelyOcrTitleMatch(title, normalizedRow, candidates),
+  );
+  return fuzzy || preferredTitle || getSingleAppearanceDisplayTitle(appearance, fallbackTitle);
+}
+
+function getAppearanceSingleTitles(achievement) {
+  return [
+    achievement?.maleTitle,
+    achievement?.femaleTitle,
+    ...(Array.isArray(achievement?.titles) ? achievement.titles : []),
+  ].filter(Boolean);
+}
+
+function getAppearanceTitleColumn(appearance, title = "") {
+  if (!appearance || appearance.type !== "appearance") {
+    return "";
+  }
+  const key = normalizeTextKey(title);
+  if (key && key === normalizeTextKey(appearance.maleTitle || "")) {
+    return "male";
+  }
+  if (key && key === normalizeTextKey(appearance.femaleTitle || "")) {
+    return "female";
+  }
+  return "";
+}
+
+function getAppearanceTitleByColumn(appearance, column = "") {
+  if (!appearance || appearance.type !== "appearance") {
+    return "";
+  }
+  if (column === "male") {
+    return appearance.maleTitle || "";
+  }
+  if (column === "female") {
+    return appearance.femaleTitle || "";
+  }
+  return "";
+}
+
+function getAppearanceColumnFromPair(left, right) {
+  const leftColumn = getAppearanceTitleColumn(left?.item, left?.title);
+  const rightColumn = getAppearanceTitleColumn(right?.item, right?.title);
+  return leftColumn && leftColumn === rightColumn ? leftColumn : "";
 }
 
 function getInventoryAchievementDetail(achievement) {
@@ -4985,7 +5152,7 @@ function getPendingMatchStatusText(match, achievement) {
   if (achievement.type === "appearance") {
     return kind;
   }
-  return `${kind} · 分数取本站数据`;
+  return kind;
 }
 
 function createConfirmedItem(record) {
