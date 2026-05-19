@@ -8,7 +8,7 @@ const INVENTORY_PROFILE_IDS = ["profile-1", "profile-2", "profile-3", "profile-4
 const APPEARANCE_SCORE_LIMIT = 12;
 const TESSERACT_VENDOR_BASE = new URL("./vendor/tesseract/", document.baseURI).href;
 const TESSDATA_VENDOR_BASE = new URL("./vendor/tessdata/", document.baseURI).href;
-const SERVICE_WORKER_URL = new URL("./sw.js?v=20260519-ocr-local18", document.baseURI).href;
+const SERVICE_WORKER_URL = new URL("./sw.js?v=20260520-upload-input3", document.baseURI).href;
 const OCR_MAX_PARALLEL_FILES = 2;
 const OCR_TITLE_ALIASES = new Map([
   ["区嫩人人太个", "茶韵悠悠"],
@@ -105,6 +105,12 @@ const OCR_TITLE_ALIASES = new Map([
   ["用上映媒娟", "月映婵娟"],
   ["小了线砍", "苍山孤鹰"],
   ["全刀只世", "金刀驸马"],
+  ["国白的不白国国", "朱颜碧玉"],
+  ["城眉这人徙", "峨眉逆徒"],
+  ["粮魅四征", "魑魅魍魉"],
+  ["哮手车掀", "酥手夺魄"],
+  ["刀与忆", "刀马旦"],
+  ["祁吵化外", "柳啼花怨"],
 ]);
 const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
 const reducedMotionMedia = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -129,6 +135,7 @@ const state = {
   activeInventoryProfile: "profile-1",
   inventory: createEmptyInventory(),
   selectedFiles: [],
+  filePickerPending: false,
   pendingMatches: [],
   ocrRunId: 0,
   ocrActive: false,
@@ -340,7 +347,9 @@ function bindEvents() {
     window.addEventListener("storage", handleInventoryStorageChange);
     elements.screenshotInput.addEventListener("change", handleFileSelection);
     elements.screenshotInput.addEventListener("click", prepareScreenshotPicker);
-    elements.uploadDrop?.addEventListener("click", prepareScreenshotPicker);
+    window.addEventListener("focus", scheduleFileSelectionSync);
+    window.addEventListener("pageshow", scheduleFileSelectionSync);
+    document.addEventListener("visibilitychange", scheduleFileSelectionSync);
     elements.uploadDrop?.addEventListener("dragenter", handleUploadDragEnter);
     elements.uploadDrop?.addEventListener("dragover", handleUploadDragOver);
     elements.uploadDrop?.addEventListener("dragleave", handleUploadDragLeave);
@@ -1665,12 +1674,14 @@ function toggleAchievement(achievementId) {
 }
 
 function prepareScreenshotPicker() {
+  state.filePickerPending = true;
   if (elements.screenshotInput) {
     elements.screenshotInput.value = "";
   }
 }
 
 function handleFileSelection(event) {
+  state.filePickerPending = false;
   const files = Array.from(event.target.files || []);
   if (!files.length) {
     if (!state.selectedFiles.length) {
@@ -1680,6 +1691,27 @@ function handleFileSelection(event) {
     return;
   }
   setSelectedFiles(files);
+}
+
+function scheduleFileSelectionSync() {
+  if (!state.filePickerPending || state.ocrActive) {
+    return;
+  }
+  window.setTimeout(syncPendingFileSelectionFromInput, 250);
+  window.setTimeout(syncPendingFileSelectionFromInput, 1000);
+}
+
+function syncPendingFileSelectionFromInput() {
+  if (!state.filePickerPending || state.ocrActive || !elements.screenshotInput) {
+    return;
+  }
+  const files = Array.from(elements.screenshotInput.files || []);
+  if (files.length) {
+    state.filePickerPending = false;
+    setSelectedFiles(files);
+    return;
+  }
+  state.filePickerPending = false;
 }
 
 function setSelectedFiles(files) {
@@ -1751,10 +1783,15 @@ function isImageFile(file) {
   if (/\.(jpe?g|png|webp|bmp|gif|avif|heic|heif)$/i.test(name)) {
     return true;
   }
+  const isGenericBinary =
+    !type || type === "application/octet-stream" || type === "binary/octet-stream";
+  if (isGenericBinary) {
+    return true;
+  }
   if (/\.[a-z0-9]{1,8}$/i.test(name)) {
     return false;
   }
-  return !type || type === "application/octet-stream" || type === "binary/octet-stream";
+  return false;
 }
 
 function compareDroppedFiles(left, right) {
@@ -2206,7 +2243,10 @@ function isSupportedAchievementOcrScreenshot(layout, gameTotal, rows) {
 }
 
 async function recognizeGameTotalFromFile(file, options = {}) {
-  const crops = await preprocessGameTotalCrops(file);
+  const [crops, greenDigitProfiles] = await Promise.all([
+    preprocessGameTotalCrops(file),
+    getGreenGameTotalDigitProfiles(file).catch(() => []),
+  ]);
   const texts = [];
   for (let index = 0; index < crops.length; index += 1) {
     throwIfOcrCancelled(options.shouldCancel);
@@ -2230,12 +2270,15 @@ async function recognizeGameTotalFromFile(file, options = {}) {
       const total = detectGameTotalFromHeader(texts.join("\n"));
       if (total !== null) {
         options.onProgress?.(1);
-        return total;
+        return repairGameTotalWithGreenProfiles(total, greenDigitProfiles);
       }
     }
     options.onProgress?.((index + 1) / Math.max(crops.length, 1));
   }
-  return detectGameTotalFromHeader(texts.join("\n"));
+  return repairGameTotalWithGreenProfiles(
+    detectGameTotalFromHeader(texts.join("\n")),
+    greenDigitProfiles,
+  );
 }
 
 async function recognizeAchievementRowsFast(file, options = {}) {
@@ -2648,6 +2691,208 @@ function preprocessGameTotalCrops(file) {
   });
 }
 
+function getGreenGameTotalDigitProfiles(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("图片解码失败"));
+      image.onload = () => {
+        if (image.height <= image.width * 1.2) {
+          resolve([]);
+          return;
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        context.drawImage(image, 0, 0);
+        const cropRatios = [
+          { x: 0.8, y: 0.155, width: 0.16, height: 0.055 },
+          { x: 0.78, y: 0.155, width: 0.19, height: 0.055 },
+          { x: 0.75, y: 0.145, width: 0.23, height: 0.075 },
+        ];
+        const profileSets = cropRatios
+          .map((cropRatio) =>
+            extractGreenDigitProfiles(
+              context,
+              image.width,
+              image.height,
+              cropRatio,
+            ),
+          )
+          .filter((profiles) => profiles.length >= 3 && profiles.length <= 5);
+        resolve(profileSets[0] || []);
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function extractGreenDigitProfiles(context, width, height, cropRatio) {
+  const crop = {
+    x: clampNumber(Math.round(width * cropRatio.x), 0, width - 1),
+    y: clampNumber(Math.round(height * cropRatio.y), 0, height - 1),
+    width: clampNumber(Math.round(width * cropRatio.width), 1, width),
+    height: clampNumber(Math.round(height * cropRatio.height), 1, height),
+  };
+  crop.width = clampNumber(crop.width, 1, width - crop.x);
+  crop.height = clampNumber(crop.height, 1, height - crop.y);
+  const imageData = context.getImageData(crop.x, crop.y, crop.width, crop.height);
+  const data = imageData.data;
+  const columnHits = new Array(crop.width).fill(0);
+
+  for (let y = 0; y < crop.height; y += 1) {
+    for (let x = 0; x < crop.width; x += 1) {
+      if (isGreenScoreDigitPixel(data, crop.width, x, y)) {
+        columnHits[x] += 1;
+      }
+    }
+  }
+
+  const minColumnHits = Math.max(1, Math.round(crop.height * 0.04));
+  const activeColumns = columnHits.map((count) => count >= minColumnHits);
+  const groups = mergeNearbyDigitGroups(findActiveSegments(activeColumns), 3)
+    .filter((group) => group.end - group.start >= 2);
+
+  return groups
+    .map((group) => createGreenDigitProfile(data, crop.width, crop.height, group))
+    .filter((profile) => profile && profile.pixelCount >= 40 && profile.height >= 12);
+}
+
+function isGreenScoreDigitPixel(data, width, x, y) {
+  const offset = (y * width + x) * 4;
+  const red = data[offset];
+  const green = data[offset + 1];
+  const blue = data[offset + 2];
+  return (
+    green >= 90 &&
+    green > red * 1.08 &&
+    green > blue * 1.04 &&
+    green - Math.max(red, blue) >= 10
+  );
+}
+
+function findActiveSegments(values) {
+  const segments = [];
+  let start = null;
+  values.forEach((active, index) => {
+    if (active && start === null) {
+      start = index;
+    } else if (!active && start !== null) {
+      segments.push({ start, end: index - 1 });
+      start = null;
+    }
+  });
+  if (start !== null) {
+    segments.push({ start, end: values.length - 1 });
+  }
+  return segments;
+}
+
+function mergeNearbyDigitGroups(groups, maxGap) {
+  const merged = [];
+  groups.forEach((group) => {
+    const previous = merged[merged.length - 1];
+    if (previous && group.start - previous.end <= maxGap) {
+      previous.end = group.end;
+    } else {
+      merged.push({ ...group });
+    }
+  });
+  return merged;
+}
+
+function createGreenDigitProfile(data, width, height, group) {
+  let minY = height;
+  let maxY = 0;
+  let pixelCount = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = group.start; x <= group.end; x += 1) {
+      if (isGreenScoreDigitPixel(data, width, x, y)) {
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+        pixelCount += 1;
+      }
+    }
+  }
+  if (!pixelCount || minY > maxY) {
+    return null;
+  }
+
+  const digitWidth = group.end - group.start + 1;
+  const digitHeight = maxY - minY + 1;
+  const cells = [];
+  for (let row = 0; row < 5; row += 1) {
+    const cellRow = [];
+    for (let col = 0; col < 3; col += 1) {
+      const xStart = Math.floor(group.start + (col * digitWidth) / 3);
+      const xEnd = Math.floor(group.start + ((col + 1) * digitWidth) / 3);
+      const yStart = Math.floor(minY + (row * digitHeight) / 5);
+      const yEnd = Math.floor(minY + ((row + 1) * digitHeight) / 5);
+      let hits = 0;
+      let total = 0;
+      for (let y = yStart; y < yEnd; y += 1) {
+        for (let x = xStart; x < xEnd; x += 1) {
+          total += 1;
+          if (isGreenScoreDigitPixel(data, width, x, y)) {
+            hits += 1;
+          }
+        }
+      }
+      cellRow.push(hits / Math.max(1, total));
+    }
+    cells.push(cellRow);
+  }
+
+  return {
+    width: digitWidth,
+    height: digitHeight,
+    pixelCount,
+    cells,
+  };
+}
+
+function repairGameTotalWithGreenProfiles(total, profiles) {
+  if (total === null || !Array.isArray(profiles) || !profiles.length) {
+    return total;
+  }
+  const digits = String(total).split("");
+  if (digits.length !== profiles.length) {
+    return total;
+  }
+
+  let changed = false;
+  const repairedDigits = digits.map((digit, index) => {
+    if (digit === "3" && isLikelyGreenEightDigit(profiles[index])) {
+      changed = true;
+      return "8";
+    }
+    return digit;
+  });
+  if (!changed) {
+    return total;
+  }
+
+  const repaired = Number(repairedDigits.join(""));
+  return isValidGameTotal(repaired) ? repaired : total;
+}
+
+function isLikelyGreenEightDigit(profile) {
+  const cells = profile?.cells;
+  return Boolean(
+    profile?.width >= 12 &&
+      cells?.[1]?.[0] > 0.35 &&
+      cells?.[1]?.[2] > 0.35 &&
+      cells?.[2]?.[1] > 0.45 &&
+      cells?.[3]?.[0] > 0.35 &&
+      cells?.[3]?.[2] > 0.35,
+  );
+}
+
 function detectAchievementRowBands(context, width, height) {
   const imageData = context.getImageData(0, 0, width, height);
   const data = imageData.data;
@@ -2818,6 +3063,7 @@ function createFallbackAchievementBands(height) {
 
 function createAchievementRowOcrImages(context, width, height, band) {
   const scale = 5;
+  const isShortBand = band.partial || band.height < height * 0.05;
   const cropTopRatio = band.partial ? 0.02 : 0.08;
   const cropHeightRatio = band.partial ? 0.9 : 0.72;
   const baseCrop = createRowCropGeometry(band, height, cropTopRatio, cropHeightRatio);
@@ -2836,6 +3082,19 @@ function createAchievementRowOcrImages(context, width, height, band) {
       y: standardCrop.y,
       width: Math.round(width * 0.31),
       height: standardCrop.height,
+    });
+  }
+  if (isShortBand) {
+    const expandedY = clampNumber(Math.round(band.y - height * 0.02), 0, height - 1);
+    titleCrops.push({
+      x: Math.round(width * 0.025),
+      y: expandedY,
+      width: Math.round(width * 0.385),
+      height: clampNumber(
+        Math.round(band.height + height * 0.03),
+        1,
+        height - expandedY,
+      ),
     });
   }
   const titlePillCrop = detectAchievementTitlePillCrop(context, width, height, band);
@@ -2857,6 +3116,15 @@ function createAchievementRowOcrImages(context, width, height, band) {
         mode: "light",
       }),
     ),
+    ...(isShortBand
+      ? [
+          createSingleCropOcrImage(context, titleCrop, {
+            scale: 8,
+            threshold: 170,
+            mode: "light",
+          }),
+        ]
+      : []),
   ]);
   const titleSources = [...titlePillSources, ...cropSources];
   const primaryTitleSources = titlePillSources.length
@@ -3791,10 +4059,12 @@ function replaceSequentialCandidateIfBetter(
   displayIndexByKey,
   appearanceColumn = "",
 ) {
+  const isSameRecord = displayRow?.kind === candidate.kind && displayRow.id === candidate.id;
+  const canReplaceAcrossKinds = candidate.inferred || Number(candidate.rank) >= 3;
   if (
     !displayRow ||
-    displayRow.kind !== candidate.kind ||
-    displayRow.id === candidate.id ||
+    isSameRecord ||
+    (displayRow.kind !== candidate.kind && !canReplaceAcrossKinds) ||
     !hasUsableRowText(rows[rowIndex])
   ) {
     return false;
@@ -4105,7 +4375,28 @@ function extractBestUnmatchedRowCandidate(rowText) {
   return extractOcrNameCandidates(rowText)
     .filter((candidate) => normalizeTextKey(candidate).length >= 3)
     .filter((candidate) => !/成就|点数|查看|全部|激活|装饰|图鉴/.test(candidate))
+    .filter(isLikelyUnmatchedTitleCandidate)
     .sort((left, right) => right.length - left.length)[0] || "";
+}
+
+function isLikelyUnmatchedTitleCandidate(candidate) {
+  const key = normalizeTextKey(candidate);
+  if (key.length < 3) {
+    return false;
+  }
+  return getKnownOcrRows().some((row) => {
+    const titleKey = normalizeTextKey(row.title);
+    if (!titleKey || Math.abs(titleKey.length - key.length) > 2) {
+      return false;
+    }
+    if (titleKey.includes(key) || key.includes(titleKey)) {
+      return Math.min(titleKey.length, key.length) >= 3;
+    }
+    if (countSharedCharacters(titleKey, key) < 3) {
+      return false;
+    }
+    return levenshteinDistance(titleKey, key) <= 2;
+  });
 }
 
 function detectOcrScreenType(payload) {

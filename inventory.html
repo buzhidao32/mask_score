@@ -19,7 +19,7 @@
         } catch (error) {}
       })();
     </script>
-    <link rel="stylesheet" href="./styles.css?v=20260519-fast-mode" />
+    <link rel="stylesheet" href="./styles.css?v=20260520-upload-input2" />
   </head>
   <body class="inventory-only-page">
     <button
@@ -79,17 +79,18 @@
 
         <div class="inventory-layout">
           <div class="inventory-card upload-card">
-            <label id="upload-drop" class="upload-drop" for="screenshot-input">
+            <label id="upload-drop" class="upload-drop">
               <span>上传图鉴截图</span>
               <small>点击选择，或把图片/文件夹拖到这里</small>
+              <input
+                id="screenshot-input"
+                class="file-input"
+                type="file"
+                accept="image/*,.jpg,.jpeg,.png,.webp,.bmp,.gif,.avif,.heic,.heif"
+                multiple
+                aria-label="上传图鉴截图"
+              />
             </label>
-            <input
-              id="screenshot-input"
-              class="file-input"
-              type="file"
-              accept="image/*,.jpg,.jpeg,.png,.webp,.bmp,.gif,.avif,.heic,.heif"
-              multiple
-            />
             <div class="upload-actions">
               <button id="run-ocr" class="primary-button" type="button" disabled>
                 开始识别
@@ -193,6 +194,6 @@
 
     <script src="./vendor/tesseract/tesseract.min.js?v=5.1.1" defer></script>
     <script src="./vendor/pinyin-pro.js" defer></script>
-    <script src="./app.js?v=20260519-ocr-local18" defer></script>
+    <script src="./app.js?v=20260520-upload-input3" defer></script>
   </body>
 </html>
