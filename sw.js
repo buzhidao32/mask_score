@@ -1,11 +1,11 @@
-const APP_CACHE_NAME = "mask-score-app-20260520-upload-input3";
+const APP_CACHE_NAME = "mask-score-app-20260520-upload-input4";
 const OCR_CACHE_NAME = "mask-score-ocr-assets-v1";
 const APP_ASSETS = [
   "./",
   "./index.html",
   "./inventory.html",
   "./styles.css?v=20260520-upload-input2",
-  "./app.js?v=20260520-upload-input3",
+  "./app.js?v=20260520-upload-input4",
   "./data/mask_scores.json",
   "./vendor/pinyin-pro.js",
   "./vendor/tesseract/tesseract.min.js?v=5.1.1",

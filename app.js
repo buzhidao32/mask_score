@@ -8,7 +8,7 @@ const INVENTORY_PROFILE_IDS = ["profile-1", "profile-2", "profile-3", "profile-4
 const APPEARANCE_SCORE_LIMIT = 12;
 const TESSERACT_VENDOR_BASE = new URL("./vendor/tesseract/", document.baseURI).href;
 const TESSDATA_VENDOR_BASE = new URL("./vendor/tessdata/", document.baseURI).href;
-const SERVICE_WORKER_URL = new URL("./sw.js?v=20260520-upload-input3", document.baseURI).href;
+const SERVICE_WORKER_URL = new URL("./sw.js?v=20260520-upload-input4", document.baseURI).href;
 const OCR_MAX_PARALLEL_FILES = 2;
 const OCR_TITLE_ALIASES = new Map([
   ["区嫩人人太个", "茶韵悠悠"],
@@ -346,6 +346,7 @@ function bindEvents() {
     elements.inventoryProfile?.addEventListener("change", handleInventoryProfileChange);
     window.addEventListener("storage", handleInventoryStorageChange);
     elements.screenshotInput.addEventListener("change", handleFileSelection);
+    elements.screenshotInput.addEventListener("input", handleFileSelection);
     elements.screenshotInput.addEventListener("click", prepareScreenshotPicker);
     window.addEventListener("focus", scheduleFileSelectionSync);
     window.addEventListener("pageshow", scheduleFileSelectionSync);
@@ -1697,11 +1698,15 @@ function scheduleFileSelectionSync() {
   if (!state.filePickerPending || state.ocrActive) {
     return;
   }
-  window.setTimeout(syncPendingFileSelectionFromInput, 250);
-  window.setTimeout(syncPendingFileSelectionFromInput, 1000);
+  [150, 500, 1200, 2500].forEach((delay, index, delays) => {
+    window.setTimeout(
+      () => syncPendingFileSelectionFromInput(index === delays.length - 1),
+      delay,
+    );
+  });
 }
 
-function syncPendingFileSelectionFromInput() {
+function syncPendingFileSelectionFromInput(isFinalAttempt = false) {
   if (!state.filePickerPending || state.ocrActive || !elements.screenshotInput) {
     return;
   }
@@ -1711,7 +1716,9 @@ function syncPendingFileSelectionFromInput() {
     setSelectedFiles(files);
     return;
   }
-  state.filePickerPending = false;
+  if (isFinalAttempt) {
+    state.filePickerPending = false;
+  }
 }
 
 function setSelectedFiles(files) {
