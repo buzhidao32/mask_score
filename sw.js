@@ -1,4 +1,4 @@
-const CACHE_VERSION = "20260520-ocr-speed4";
+const CACHE_VERSION = "20260520-guide2";
 const OCR_CACHE_NAME = "mask-score-ocr-assets-v1";
 const VERSIONED_CACHE_NAME = `mask-score-versioned-assets-${CACHE_VERSION}`;
 

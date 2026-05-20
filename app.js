@@ -4,7 +4,8 @@ const PANEL_STORAGE_KEY = "mask-score-panel-state";
 const INVENTORY_STORAGE_KEY = "mask-score-inventory-v1";
 const INVENTORY_ACTIVE_PROFILE_KEY = "mask-score-inventory-active-profile-v1";
 const OCR_FAST_MODE_STORAGE_KEY = "mask-score-ocr-fast-mode-v1";
-const APP_ASSET_VERSION = "20260520-ocr-speed4";
+const INVENTORY_HELP_SEEN_KEY = "mask-score-inventory-help-seen-v1";
+const APP_ASSET_VERSION = "20260520-guide2";
 const INVENTORY_PROFILE_IDS = ["profile-1", "profile-2", "profile-3", "profile-4", "profile-5"];
 const APPEARANCE_SCORE_LIMIT = 12;
 const TESSERACT_VENDOR_BASE = new URL("./vendor/tesseract/", document.baseURI).href;
@@ -167,6 +168,7 @@ const state = {
   ocrAssetWarmupPromise: null,
   ocrAssetWarmupScheduled: false,
   confirmAction: null,
+  confirmCloseAction: null,
   confirmReturnFocus: null,
   defaultStatus: "",
 };
@@ -211,6 +213,7 @@ const elements = {
   scoreSummary: document.getElementById("score-summary"),
   tokenCount: document.getElementById("token-count"),
   tokenList: document.getElementById("token-list"),
+  inventoryHelp: document.getElementById("inventory-help"),
   repairCache: document.getElementById("repair-cache"),
   resetInventory: document.getElementById("reset-inventory"),
   confirmDialog: document.getElementById("confirm-dialog"),
@@ -285,6 +288,7 @@ async function init() {
     if (hasInventory) {
       scheduleTesseractWarmup(TESSERACT_WARMUP_DELAY_MS);
       scheduleOcrAssetWarmup(2800);
+      scheduleInventoryHelpGuide();
     }
 
     if (hasSearch) {
@@ -395,6 +399,7 @@ function bindEvents() {
     elements.manualQuery.addEventListener("input", renderManualResults);
     elements.manualResults.addEventListener("click", handleManualClick);
     elements.tokenList?.addEventListener("click", handleManualClick);
+    elements.inventoryHelp?.addEventListener("click", () => showInventoryHelpGuide(false));
     elements.repairCache?.addEventListener("click", repairRuntimeCache);
     elements.resetInventory.addEventListener("click", resetInventory);
     elements.scoreSummary?.addEventListener("input", handleGameTotalInput);
@@ -489,6 +494,49 @@ function syncOcrFastModeControl() {
   if (elements.ocrFastMode) {
     elements.ocrFastMode.checked = state.ocrFastMode;
   }
+}
+
+function scheduleInventoryHelpGuide() {
+  if (!hasInventory || hasSeenInventoryHelp()) {
+    return;
+  }
+  window.setTimeout(() => {
+    if (!hasSeenInventoryHelp() && !state.ocrActive && !state.ocrLoading) {
+      showInventoryHelpGuide(true);
+    }
+  }, 450);
+}
+
+function hasSeenInventoryHelp() {
+  try {
+    return localStorage.getItem(INVENTORY_HELP_SEEN_KEY) === "1";
+  } catch (error) {
+    return true;
+  }
+}
+
+function markInventoryHelpSeen() {
+  try {
+    localStorage.setItem(INVENTORY_HELP_SEEN_KEY, "1");
+  } catch (error) {}
+}
+
+function showInventoryHelpGuide(isAuto = false) {
+  showConfirmDialog({
+    title: "我的图鉴使用说明",
+    message: [
+      "只上传“装饰箱 - 图鉴 - 已激活”列表的所有截图（请点完未激活区域所有可激活称号，避免错漏），每6个称号截一张，按顺序往下截图，尽量别遮挡、错漏或跳过称号，截图仅在本机识别",
+      "识别结果先进入待确认，确认后才计入本站计算分；无法匹配的内容可以忽略，也可以在下方手动补录",
+      "本站排序基本按游戏图鉴顺序展示，确认时建议从上到下核对，方便发现漏识别或误识别",
+      "游戏总分相同也要手动核对一遍：可能少一个50分称号，同时多一个20分和一个30分称号",
+      "游戏总分会优先读截图右上角，也可以手动改；因自身疏忽确认导致的问题，与本站无关",
+      "图鉴档案互不相通，切换档案前请确认当前识别已经完成",
+    ],
+    confirmText: "知道了",
+    hideCancel: true,
+    onConfirm: isAuto ? markInventoryHelpSeen : undefined,
+    onClose: isAuto ? markInventoryHelpSeen : undefined,
+  });
 }
 
 function handleOcrFastModeChange(event) {
@@ -711,37 +759,68 @@ async function clearRuntimeCacheAndReload() {
   }
 }
 
-function showConfirmDialog({ title, message, confirmText, onConfirm }) {
+function showConfirmDialog({
+  title,
+  message,
+  confirmText,
+  onConfirm,
+  onClose,
+  hideCancel = false,
+}) {
   if (!elements.confirmDialog) {
     if (window.confirm(message)) {
-      onConfirm();
+      onConfirm?.();
+    } else {
+      onClose?.();
     }
     return;
   }
 
   state.confirmAction = onConfirm;
+  state.confirmCloseAction = onClose;
   state.confirmReturnFocus =
     document.activeElement instanceof HTMLElement ? document.activeElement : null;
   elements.confirmDialogTitle.textContent = title;
-  elements.confirmDialogMessage.textContent = message;
+  elements.confirmDialogMessage.replaceChildren();
+  if (Array.isArray(message)) {
+    const list = document.createElement("ul");
+    list.className = "guide-list";
+    message.forEach((text) => {
+      const item = document.createElement("li");
+      item.textContent = text;
+      list.appendChild(item);
+    });
+    elements.confirmDialogMessage.appendChild(list);
+  } else {
+    const paragraph = document.createElement("p");
+    paragraph.textContent = message || "";
+    elements.confirmDialogMessage.appendChild(paragraph);
+  }
   elements.confirmDialogConfirm.textContent = confirmText;
+  elements.confirmDialogCancel.hidden = hideCancel;
   elements.confirmDialog.hidden = false;
   document.body.classList.add("is-modal-open");
   elements.confirmDialogConfirm.focus();
 }
 
-function closeConfirmDialog() {
+function closeConfirmDialog(runCloseAction = true) {
   if (!elements.confirmDialog || elements.confirmDialog.hidden) {
     return;
   }
 
+  const closeAction = state.confirmCloseAction;
   elements.confirmDialog.hidden = true;
   document.body.classList.remove("is-modal-open");
+  elements.confirmDialogCancel.hidden = false;
   state.confirmAction = null;
+  state.confirmCloseAction = null;
   const returnFocus = state.confirmReturnFocus;
   state.confirmReturnFocus = null;
   if (returnFocus?.isConnected) {
     returnFocus.focus();
+  }
+  if (runCloseAction && typeof closeAction === "function") {
+    closeAction();
   }
 }
 
