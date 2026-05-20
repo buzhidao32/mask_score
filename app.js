@@ -4,6 +4,7 @@ const PANEL_STORAGE_KEY = "mask-score-panel-state";
 const INVENTORY_STORAGE_KEY = "mask-score-inventory-v1";
 const INVENTORY_ACTIVE_PROFILE_KEY = "mask-score-inventory-active-profile-v1";
 const OCR_FAST_MODE_STORAGE_KEY = "mask-score-ocr-fast-mode-v1";
+const APP_ASSET_VERSION = "20260520-ocr-speed4";
 const INVENTORY_PROFILE_IDS = ["profile-1", "profile-2", "profile-3", "profile-4", "profile-5"];
 const APPEARANCE_SCORE_LIMIT = 12;
 const TESSERACT_VENDOR_BASE = new URL("./vendor/tesseract/", document.baseURI).href;
@@ -12,8 +13,18 @@ const TESSERACT_SCRIPT_URL = new URL(
   "./vendor/tesseract/tesseract.min.js?v=5.1.1",
   document.baseURI,
 ).href;
-const SERVICE_WORKER_URL = new URL("./sw.js?v=20260520-lazy-ocr1", document.baseURI).href;
+const OCR_ASSET_URLS = [
+  new URL("worker.min.js", TESSERACT_VENDOR_BASE).href,
+  new URL("tesseract-core-simd-lstm.wasm.js", TESSERACT_VENDOR_BASE).href,
+  new URL("tesseract-core-simd-lstm.wasm", TESSERACT_VENDOR_BASE).href,
+  new URL("chi_sim.traineddata.gz", TESSDATA_VENDOR_BASE).href,
+  new URL("eng.traineddata.gz", TESSDATA_VENDOR_BASE).href,
+];
+const SERVICE_WORKER_URL = new URL(`./sw.js?v=${APP_ASSET_VERSION}`, document.baseURI).href;
 const OCR_MAX_PARALLEL_FILES = 2;
+const TESSERACT_STALL_TIMEOUT_MS = 60000;
+const TESSERACT_WARMUP_DELAY_MS = 800;
+const CACHE_RELOAD_TIMEOUT_MS = 1200;
 const OCR_TITLE_ALIASES = new Map([
   ["区嫩人人太个", "茶韵悠悠"],
   ["团于伞晚", "酥手夺魄"],
@@ -143,11 +154,18 @@ const state = {
   pendingMatches: [],
   ocrRunId: 0,
   ocrActive: false,
+  ocrLoading: false,
   ocrFastMode: false,
   ocrStartedAt: 0,
   ocrTimerId: 0,
   ocrTimerLabel: "识别中",
   tesseractLoadPromise: null,
+  tesseractLoadProgress: 0,
+  tesseractLoadBytes: 0,
+  tesseractLoadTotalBytes: 0,
+  tesseractWarmupScheduled: false,
+  ocrAssetWarmupPromise: null,
+  ocrAssetWarmupScheduled: false,
   confirmAction: null,
   confirmReturnFocus: null,
   defaultStatus: "",
@@ -235,7 +253,7 @@ async function init() {
   state.inventory = readInventory();
 
   try {
-    const response = await fetch("./data/mask_scores.json", { cache: "no-store" });
+    const response = await fetch(`./data/mask_scores.json?v=${APP_ASSET_VERSION}`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -264,6 +282,10 @@ async function init() {
       renderTraitForm();
     }
     renderInventory();
+    if (hasInventory) {
+      scheduleTesseractWarmup(TESSERACT_WARMUP_DELAY_MS);
+      scheduleOcrAssetWarmup(2800);
+    }
 
     if (hasSearch) {
       const preset = readPresetQuery();
@@ -639,6 +661,19 @@ async function clearRuntimeCacheAndReload() {
   if (elements.repairCache) {
     elements.repairCache.disabled = true;
   }
+  cancelActiveOcr();
+
+  const freshUrl = new URL(window.location.href);
+  freshUrl.searchParams.set("fresh", String(Date.now()));
+  let hasReloaded = false;
+  const reload = () => {
+    if (hasReloaded) {
+      return;
+    }
+    hasReloaded = true;
+    window.location.replace(freshUrl.href);
+  };
+  const fallbackReload = window.setTimeout(reload, CACHE_RELOAD_TIMEOUT_MS);
 
   try {
     const appScope = new URL("./", document.baseURI).href;
@@ -662,16 +697,17 @@ async function clearRuntimeCacheAndReload() {
         keys
           .filter(
             (key) =>
-              key.startsWith("mask-score-app-") || key.startsWith("mask-score-static-"),
+              key.startsWith("mask-score-app-") ||
+              key.startsWith("mask-score-static-") ||
+              key.startsWith("mask-score-versioned-assets-"),
           )
           .map((key) => caches.delete(key)),
       );
     }
   } catch {
   } finally {
-    const freshUrl = new URL(window.location.href);
-    freshUrl.searchParams.set("fresh", String(Date.now()));
-    window.location.replace(freshUrl.href);
+    window.clearTimeout(fallbackReload);
+    reload();
   }
 }
 
@@ -1018,9 +1054,19 @@ function buildSearchEntries(values) {
     raw,
     normalizedText: normalizeTextKey(raw),
     normalizedLatin: normalizeLatinKey(raw),
-    pinyinFull: getPinyinFull(raw),
-    pinyinInitials: getPinyinInitials(raw),
+    pinyinFull: "",
+    pinyinInitials: "",
+    pinyinReady: !hasChinese(raw),
   }));
+}
+
+function ensurePinyinEntry(entry) {
+  if (!entry || entry.pinyinReady) {
+    return;
+  }
+  entry.pinyinFull = getPinyinFull(entry.raw);
+  entry.pinyinInitials = getPinyinInitials(entry.raw);
+  entry.pinyinReady = true;
 }
 
 function enhanceMask(mask) {
@@ -1244,6 +1290,8 @@ function scoreEntry(entry, query) {
   if (!query.latinKey) {
     return null;
   }
+
+  ensurePinyinEntry(entry);
 
   if (entry.normalizedLatin && entry.normalizedLatin === query.latinKey) {
     return 3;
@@ -1795,6 +1843,8 @@ function setSelectedFiles(files) {
     elements.ocrStatus.textContent = ignoredCount
       ? `已选择 ${state.selectedFiles.length} 张图片，已忽略 ${ignoredCount} 个非图片文件`
       : `已选择 ${state.selectedFiles.length} 张图片`;
+    scheduleTesseractWarmup(0);
+    scheduleOcrAssetWarmup(600);
   } else if (selectedFiles.length) {
     elements.ocrStatus.textContent = "未读取到可识别图片，请改选截图原图";
   } else {
@@ -1942,11 +1992,12 @@ function readDroppedEntry(entry, path = "") {
 }
 
 function cancelActiveOcr() {
-  if (!state.ocrActive) {
+  if (!state.ocrActive && !state.ocrLoading) {
     return;
   }
   state.ocrRunId += 1;
   state.ocrActive = false;
+  state.ocrLoading = false;
   stopOcrTimer("识别已取消");
 }
 
@@ -1962,22 +2013,40 @@ async function runOcr() {
   }
 
   elements.runOcrButton.disabled = true;
+  state.ocrRunId += 1;
+  const loadingRunId = state.ocrRunId;
+  state.ocrLoading = true;
   if (!window.Tesseract) {
-    elements.ocrStatus.textContent = "正在加载识别组件";
+    updateTesseractLoadingStatus();
   }
+  const loadingStatusTimer = window.setInterval(() => {
+    if (state.ocrLoading && !window.Tesseract) {
+      updateTesseractLoadingStatus();
+    }
+  }, 500);
   try {
     await ensureTesseractLoaded();
+    if (loadingRunId !== state.ocrRunId) {
+      throw new Error("识别已取消");
+    }
   } catch (error) {
-    elements.ocrStatus.textContent = "识别组件加载失败，检查网络后重试";
+    elements.ocrStatus.textContent =
+      error.message === "识别已取消"
+        ? "识别已取消"
+        : "识别组件加载失败，检查网络后重试";
     elements.runOcrButton.disabled = state.selectedFiles.length === 0;
+    state.ocrLoading = false;
+    window.clearInterval(loadingStatusTimer);
     return;
   }
+  state.ocrLoading = false;
+  window.clearInterval(loadingStatusTimer);
+  scheduleOcrAssetWarmup(0);
 
   elements.ocrProgress.hidden = false;
   elements.ocrProgress.value = 0;
-  state.ocrRunId += 1;
   state.ocrActive = true;
-  const runId = state.ocrRunId;
+  const runId = loadingRunId;
   const previousGameTotal = state.inventory.lastGameTotal;
   const newMatches = [];
   const gameTotalCandidates = [];
@@ -2127,31 +2196,11 @@ async function ensureTesseractLoaded() {
   }
 
   if (!state.tesseractLoadPromise) {
-    state.tesseractLoadPromise = new Promise((resolve, reject) => {
-      const existingScript = Array.from(document.scripts).find(
-        (script) => script.src === TESSERACT_SCRIPT_URL,
-      );
-      if (existingScript) {
-        existingScript.addEventListener("load", resolve, { once: true });
-        existingScript.addEventListener("error", reject, { once: true });
-        window.setTimeout(() => {
-          if (window.Tesseract) {
-            resolve();
-          } else {
-            reject(new Error("Tesseract.js 加载超时"));
-          }
-        }, 15000);
-        return;
-      }
-
-      const script = document.createElement("script");
-      script.src = TESSERACT_SCRIPT_URL;
-      script.async = true;
-      script.onload = resolve;
-      script.onerror = () => reject(new Error("Tesseract.js 加载失败"));
-      document.head.appendChild(script);
-    }).catch((error) => {
+    state.tesseractLoadPromise = loadTesseractScript().catch((error) => {
       state.tesseractLoadPromise = null;
+      state.tesseractLoadProgress = 0;
+      state.tesseractLoadBytes = 0;
+      state.tesseractLoadTotalBytes = 0;
       throw error;
     });
   }
@@ -2161,6 +2210,240 @@ async function ensureTesseractLoaded() {
     state.tesseractLoadPromise = null;
     throw new Error("Tesseract.js 未加载");
   }
+}
+
+async function loadTesseractScript() {
+  state.tesseractLoadProgress = 0;
+  state.tesseractLoadBytes = 0;
+  state.tesseractLoadTotalBytes = 0;
+  const response = await fetchWithStallTimeout(TESSERACT_SCRIPT_URL);
+  if (!response.ok) {
+    throw new Error(`Tesseract.js 加载失败：${response.status}`);
+  }
+
+  const totalBytes = Number(response.headers.get("content-length")) || 0;
+  state.tesseractLoadTotalBytes = totalBytes;
+  let scriptBlob;
+  if (response.body?.getReader) {
+    scriptBlob = await readResponseBlobWithProgress(response, totalBytes);
+  } else {
+    scriptBlob = await readResponseBlobWithoutProgress(response);
+  }
+
+  const scriptUrl = URL.createObjectURL(scriptBlob);
+  try {
+    await injectScript(scriptUrl);
+  } finally {
+    URL.revokeObjectURL(scriptUrl);
+  }
+}
+
+function fetchWithStallTimeout(url) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => {
+    controller.abort();
+  }, TESSERACT_STALL_TIMEOUT_MS);
+  return fetch(url, { signal: controller.signal }).finally(() => {
+    window.clearTimeout(timer);
+  });
+}
+
+async function readResponseBlobWithProgress(response, totalBytes) {
+  const reader = response.body.getReader();
+  const chunks = [];
+  let receivedBytes = 0;
+  while (true) {
+    const { done, value } = await readNextChunkWithStallTimeout(reader);
+    if (done) {
+      break;
+    }
+    if (value) {
+      chunks.push(value);
+      receivedBytes += value.byteLength || value.length || 0;
+      state.tesseractLoadBytes = receivedBytes;
+      state.tesseractLoadProgress = totalBytes
+        ? clampNumber(receivedBytes / totalBytes, 0, 0.99)
+        : 0;
+    }
+  }
+  state.tesseractLoadProgress = 1;
+  return new Blob(chunks, { type: "text/javascript" });
+}
+
+function readNextChunkWithStallTimeout(reader) {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reader.cancel().catch(() => {});
+      reject(new Error("Tesseract.js 下载停滞"));
+    }, TESSERACT_STALL_TIMEOUT_MS);
+    reader.read().then(
+      (result) => {
+        window.clearTimeout(timer);
+        resolve(result);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function readResponseBlobWithoutProgress(response) {
+  let timer = 0;
+  try {
+    const blob = await Promise.race([
+      response.blob(),
+      new Promise((_, reject) => {
+        timer = window.setTimeout(
+          () => reject(new Error("Tesseract.js 下载停滞")),
+          TESSERACT_STALL_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    state.tesseractLoadProgress = 1;
+    return blob;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function injectScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("Tesseract.js 加载失败"));
+    document.head.appendChild(script);
+  });
+}
+
+function updateTesseractLoadingStatus() {
+  if (!elements.ocrStatus) {
+    return;
+  }
+  const progress = state.tesseractLoadProgress;
+  if (progress > 0 && progress < 1) {
+    elements.ocrStatus.textContent = `正在加载识别组件 ${Math.floor(progress * 100)}%`;
+    return;
+  }
+  if (state.tesseractLoadBytes > 0 && !state.tesseractLoadTotalBytes) {
+    const size = Math.max(1, Math.round(state.tesseractLoadBytes / 1024));
+    elements.ocrStatus.textContent = `正在加载识别组件 ${size} KB`;
+    return;
+  }
+  elements.ocrStatus.textContent = "正在加载识别组件";
+}
+
+function scheduleOcrAssetWarmup(delay = 0) {
+  if (!hasInventory || state.ocrAssetWarmupScheduled || state.ocrAssetWarmupPromise) {
+    return;
+  }
+
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (connection?.saveData) {
+    return;
+  }
+
+  state.ocrAssetWarmupScheduled = true;
+  const warmup = () => {
+    if (document.hidden || state.ocrActive) {
+      state.ocrAssetWarmupScheduled = false;
+      scheduleOcrAssetWarmup(1500);
+      return;
+    }
+    state.ocrAssetWarmupScheduled = false;
+    state.ocrAssetWarmupPromise = warmOcrAssets().finally(() => {
+      state.ocrAssetWarmupPromise = null;
+    });
+  };
+
+  if (delay > 0) {
+    window.setTimeout(warmup, delay);
+    return;
+  }
+
+  warmup();
+}
+
+async function warmOcrAssets() {
+  const concurrency = getOcrWarmupConcurrency();
+  let nextIndex = 0;
+
+  const warmSlot = async () => {
+    while (nextIndex < OCR_ASSET_URLS.length) {
+      if (document.hidden || state.ocrActive) {
+        return;
+      }
+      const url = OCR_ASSET_URLS[nextIndex];
+      nextIndex += 1;
+      await fetch(url, {
+        cache: "force-cache",
+        priority: "low",
+      }).catch(() => {});
+      await waitForWarmupGap();
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: concurrency }, () => warmSlot()),
+  );
+}
+
+function getOcrWarmupConcurrency() {
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (connection?.saveData) {
+    return 1;
+  }
+  const effectiveType = String(connection?.effectiveType || "");
+  if (/2g/.test(effectiveType)) {
+    return 1;
+  }
+  if (/3g/.test(effectiveType)) {
+    return 2;
+  }
+  const cores = Number(navigator.hardwareConcurrency) || 0;
+  return cores >= 8 ? 3 : 2;
+}
+
+function waitForWarmupGap() {
+  return new Promise((resolve) => window.setTimeout(resolve, 60));
+}
+
+function scheduleTesseractWarmup(delay = 0) {
+  if (!hasInventory || state.tesseractWarmupScheduled || window.Tesseract) {
+    return;
+  }
+
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (connection?.saveData) {
+    return;
+  }
+
+  state.tesseractWarmupScheduled = true;
+  const warmup = () => {
+    if (document.hidden || state.ocrActive || window.Tesseract) {
+      state.tesseractWarmupScheduled = false;
+      if (!window.Tesseract) {
+        scheduleTesseractWarmup(1200);
+      }
+      return;
+    }
+    ensureTesseractLoaded().catch(() => {
+      state.tesseractWarmupScheduled = false;
+    });
+  };
+
+  if (delay > 0) {
+    window.setTimeout(() => {
+      const runIdle = window.requestIdleCallback || ((callback) => window.setTimeout(callback, 500));
+      runIdle(warmup, { timeout: 2500 });
+    }, delay);
+    return;
+  }
+
+  warmup();
 }
 
 function getAdaptiveOcrConcurrency(fileCount) {
