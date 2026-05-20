@@ -8,7 +8,11 @@ const INVENTORY_PROFILE_IDS = ["profile-1", "profile-2", "profile-3", "profile-4
 const APPEARANCE_SCORE_LIMIT = 12;
 const TESSERACT_VENDOR_BASE = new URL("./vendor/tesseract/", document.baseURI).href;
 const TESSDATA_VENDOR_BASE = new URL("./vendor/tessdata/", document.baseURI).href;
-const SERVICE_WORKER_URL = new URL("./sw.js?v=20260520-runtime-cache1", document.baseURI).href;
+const TESSERACT_SCRIPT_URL = new URL(
+  "./vendor/tesseract/tesseract.min.js?v=5.1.1",
+  document.baseURI,
+).href;
+const SERVICE_WORKER_URL = new URL("./sw.js?v=20260520-lazy-ocr1", document.baseURI).href;
 const OCR_MAX_PARALLEL_FILES = 2;
 const OCR_TITLE_ALIASES = new Map([
   ["区嫩人人太个", "茶韵悠悠"],
@@ -143,6 +147,7 @@ const state = {
   ocrStartedAt: 0,
   ocrTimerId: 0,
   ocrTimerLabel: "识别中",
+  tesseractLoadPromise: null,
   confirmAction: null,
   confirmReturnFocus: null,
   defaultStatus: "",
@@ -1956,12 +1961,18 @@ async function runOcr() {
     return;
   }
 
+  elements.runOcrButton.disabled = true;
   if (!window.Tesseract) {
-    elements.ocrStatus.textContent = "Tesseract.js 未加载，检查网络后重试";
+    elements.ocrStatus.textContent = "正在加载识别组件";
+  }
+  try {
+    await ensureTesseractLoaded();
+  } catch (error) {
+    elements.ocrStatus.textContent = "识别组件加载失败，检查网络后重试";
+    elements.runOcrButton.disabled = state.selectedFiles.length === 0;
     return;
   }
 
-  elements.runOcrButton.disabled = true;
   elements.ocrProgress.hidden = false;
   elements.ocrProgress.value = 0;
   state.ocrRunId += 1;
@@ -2107,6 +2118,48 @@ async function runOcr() {
     }
     elements.runOcrButton.disabled = state.selectedFiles.length === 0;
     renderInventory();
+  }
+}
+
+async function ensureTesseractLoaded() {
+  if (window.Tesseract) {
+    return;
+  }
+
+  if (!state.tesseractLoadPromise) {
+    state.tesseractLoadPromise = new Promise((resolve, reject) => {
+      const existingScript = Array.from(document.scripts).find(
+        (script) => script.src === TESSERACT_SCRIPT_URL,
+      );
+      if (existingScript) {
+        existingScript.addEventListener("load", resolve, { once: true });
+        existingScript.addEventListener("error", reject, { once: true });
+        window.setTimeout(() => {
+          if (window.Tesseract) {
+            resolve();
+          } else {
+            reject(new Error("Tesseract.js 加载超时"));
+          }
+        }, 15000);
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src = TESSERACT_SCRIPT_URL;
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error("Tesseract.js 加载失败"));
+      document.head.appendChild(script);
+    }).catch((error) => {
+      state.tesseractLoadPromise = null;
+      throw error;
+    });
+  }
+
+  await state.tesseractLoadPromise;
+  if (!window.Tesseract) {
+    state.tesseractLoadPromise = null;
+    throw new Error("Tesseract.js 未加载");
   }
 }
 
