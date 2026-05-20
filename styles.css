@@ -1764,7 +1764,7 @@ html.is-theme-switching::view-transition-new(root) {
 
   .inventory-profile-actions {
     display: grid;
-    grid-template-columns: auto minmax(92px, 1fr) auto;
+    grid-template-columns: auto minmax(92px, 1fr);
     align-items: center;
     gap: 8px;
   }
@@ -1786,7 +1786,7 @@ html.is-theme-switching::view-transition-new(root) {
 
   .inventory-profile-actions .ghost-button {
     grid-column: auto;
-    width: auto;
+    width: 100%;
     min-height: 36px;
     padding: 8px 11px;
     white-space: nowrap;

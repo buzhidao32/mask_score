@@ -8,7 +8,7 @@ const INVENTORY_PROFILE_IDS = ["profile-1", "profile-2", "profile-3", "profile-4
 const APPEARANCE_SCORE_LIMIT = 12;
 const TESSERACT_VENDOR_BASE = new URL("./vendor/tesseract/", document.baseURI).href;
 const TESSDATA_VENDOR_BASE = new URL("./vendor/tessdata/", document.baseURI).href;
-const SERVICE_WORKER_URL = new URL("./sw.js?v=20260520-upload-input4", document.baseURI).href;
+const SERVICE_WORKER_URL = new URL("./sw.js?v=20260520-runtime-cache1", document.baseURI).href;
 const OCR_MAX_PARALLEL_FILES = 2;
 const OCR_TITLE_ALIASES = new Map([
   ["区嫩人人太个", "茶韵悠悠"],
@@ -188,6 +188,7 @@ const elements = {
   scoreSummary: document.getElementById("score-summary"),
   tokenCount: document.getElementById("token-count"),
   tokenList: document.getElementById("token-list"),
+  repairCache: document.getElementById("repair-cache"),
   resetInventory: document.getElementById("reset-inventory"),
   confirmDialog: document.getElementById("confirm-dialog"),
   confirmDialogTitle: document.getElementById("confirm-dialog-title"),
@@ -367,6 +368,7 @@ function bindEvents() {
     elements.manualQuery.addEventListener("input", renderManualResults);
     elements.manualResults.addEventListener("click", handleManualClick);
     elements.tokenList?.addEventListener("click", handleManualClick);
+    elements.repairCache?.addEventListener("click", repairRuntimeCache);
     elements.resetInventory.addEventListener("click", resetInventory);
     elements.scoreSummary?.addEventListener("input", handleGameTotalInput);
     elements.scoreSummary?.addEventListener("change", handleGameTotalInput);
@@ -616,6 +618,56 @@ function resetInventory() {
       refreshCurrentResults();
     },
   });
+}
+
+function repairRuntimeCache() {
+  showConfirmDialog({
+    title: "清理网页缓存",
+    message:
+      "清理旧网页缓存并重新载入最新版代码。已确认的图鉴档案保存在本机，不会被删除",
+    confirmText: "清理并刷新",
+    onConfirm: clearRuntimeCacheAndReload,
+  });
+}
+
+async function clearRuntimeCacheAndReload() {
+  if (elements.repairCache) {
+    elements.repairCache.disabled = true;
+  }
+
+  try {
+    const appScope = new URL("./", document.baseURI).href;
+    if ("serviceWorker" in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(
+        registrations
+          .filter(
+            (registration) =>
+              registration.scope === appScope ||
+              registration.scope.startsWith(appScope) ||
+              appScope.startsWith(registration.scope),
+          )
+          .map((registration) => registration.unregister()),
+      );
+    }
+
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter(
+            (key) =>
+              key.startsWith("mask-score-app-") || key.startsWith("mask-score-static-"),
+          )
+          .map((key) => caches.delete(key)),
+      );
+    }
+  } catch {
+  } finally {
+    const freshUrl = new URL(window.location.href);
+    freshUrl.searchParams.set("fresh", String(Date.now()));
+    window.location.replace(freshUrl.href);
+  }
 }
 
 function showConfirmDialog({ title, message, confirmText, onConfirm }) {

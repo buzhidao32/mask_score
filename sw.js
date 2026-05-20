@@ -1,15 +1,4 @@
-const APP_CACHE_NAME = "mask-score-app-20260520-upload-input4";
 const OCR_CACHE_NAME = "mask-score-ocr-assets-v1";
-const APP_ASSETS = [
-  "./",
-  "./index.html",
-  "./inventory.html",
-  "./styles.css?v=20260520-upload-input2",
-  "./app.js?v=20260520-upload-input4",
-  "./data/mask_scores.json",
-  "./vendor/pinyin-pro.js",
-  "./vendor/tesseract/tesseract.min.js?v=5.1.1",
-];
 const OCR_ASSETS = [
   "./vendor/tesseract/worker.min.js",
   "./vendor/tesseract/tesseract-core-simd-lstm.wasm.js",
@@ -36,10 +25,8 @@ async function cacheMissing(cacheName, urls) {
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    Promise.all([
-      cacheMissing(APP_CACHE_NAME, APP_ASSETS),
-      cacheMissing(OCR_CACHE_NAME, OCR_ASSETS),
-    ])
+    cacheMissing(OCR_CACHE_NAME, OCR_ASSETS)
+      .catch(() => {})
       .then(() => self.skipWaiting()),
   );
 });
@@ -52,7 +39,7 @@ self.addEventListener("activate", (event) => {
         Promise.all(
           keys
             .filter((key) => {
-              if (key === APP_CACHE_NAME || key === OCR_CACHE_NAME) {
+              if (key === OCR_CACHE_NAME) {
                 return false;
               }
               return (
@@ -101,15 +88,5 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  event.respondWith(
-    fetch(request)
-      .then((response) => {
-        if (response && response.ok) {
-          const clone = response.clone();
-          caches.open(APP_CACHE_NAME).then((cache) => cache.put(request, clone));
-        }
-        return response;
-      })
-      .catch(() => caches.match(request)),
-  );
+  event.respondWith(fetch(new Request(request, { cache: "no-store" })));
 });
