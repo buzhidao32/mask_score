@@ -15,10 +15,15 @@
 
 ## 更新数据
 
-1. 改 `update-source.txt` 里的包目录
-2. 双击 `update-data.bat`
+1. 改 `update-source.txt` 里的包目录，例如换成最新的 `Update_Package-26.xx.xx`
+2. 双击 `update-data.bat`，生成新的 `data\mask_scores.json`
+3. 搜 `APP_ASSET_VERSION` 和 `CACHE_VERSION`，把版本号一起改成新的更新标记
+4. 改 `index.html`、`inventory.html` 里 `app.js?v=...` 的版本号，和第 3 步保持一致
+5. 本地预览搜索最新面具，确认能查到后提交发布
 
 脚本会自动覆盖更新 `data\mask_scores.json`。
+
+注意：只更新 JSON 不改版本号时，静态站可能继续读取旧缓存，表现为数据文件里有新面具，但网页查不到。
 
 手动运行：
 
