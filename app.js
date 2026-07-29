@@ -5,7 +5,7 @@ const INVENTORY_STORAGE_KEY = "mask-score-inventory-v1";
 const INVENTORY_ACTIVE_PROFILE_KEY = "mask-score-inventory-active-profile-v1";
 const OCR_FAST_MODE_STORAGE_KEY = "mask-score-ocr-fast-mode-v1";
 const INVENTORY_HELP_SEEN_KEY = "mask-score-inventory-help-seen-v1";
-const APP_ASSET_VERSION = "20260708-mask-data";
+const APP_ASSET_VERSION = "20260729-collection-control";
 const INVENTORY_PROFILE_IDS = ["profile-1", "profile-2", "profile-3", "profile-4", "profile-5"];
 const APPEARANCE_SCORE_LIMIT = 12;
 const TESSERACT_VENDOR_BASE = new URL("./vendor/tesseract/", document.baseURI).href;
@@ -372,6 +372,7 @@ function bindEvents() {
       runSearch(elements.input.value);
       elements.input.focus();
     });
+    elements.results.addEventListener("change", handleSearchInventoryToggle);
   }
 
   if (hasInventory) {
@@ -435,6 +436,7 @@ function initResponsivePanels() {
 
 function createEmptyInventory() {
   return {
+    ownedMaskIds: new Set(),
     claimedAchievementIds: new Set(),
     claimedAchievementTitles: new Map(),
     lastGameTotal: 0,
@@ -585,8 +587,13 @@ function readInventory() {
       stored.claimedAchievementTitles && typeof stored.claimedAchievementTitles === "object"
         ? Object.entries(stored.claimedAchievementTitles)
         : [];
-    const hasRecords = claimedAchievementIds.length > 0 || claimedAchievementTitles.length > 0;
+    const ownedMaskIds = Array.isArray(stored.ownedMaskIds) ? stored.ownedMaskIds : [];
+    const hasRecords =
+      ownedMaskIds.length > 0 ||
+      claimedAchievementIds.length > 0 ||
+      claimedAchievementTitles.length > 0;
     return {
+      ownedMaskIds: new Set(ownedMaskIds),
       claimedAchievementIds: new Set(claimedAchievementIds),
       claimedAchievementTitles: new Map(claimedAchievementTitles),
       lastGameTotal:
@@ -605,6 +612,7 @@ function readInventory() {
 function writeInventory() {
   state.inventory.updatedAt = new Date().toISOString();
   const payload = {
+    ownedMaskIds: Array.from(state.inventory.ownedMaskIds),
     claimedAchievementIds: Array.from(state.inventory.claimedAchievementIds),
     claimedAchievementTitles: Object.fromEntries(state.inventory.claimedAchievementTitles),
     lastGameTotal: state.inventory.lastGameTotal,
@@ -678,7 +686,7 @@ function handleInventoryStorageChange(event) {
 function resetInventory() {
   showConfirmDialog({
     title: `清空${getInventoryProfileLabel()}`,
-    message: `确定清空${getInventoryProfileLabel()}保存的称号记录和待确认结果吗？其他档案不会受影响。`,
+    message: `确定清空${getInventoryProfileLabel()}保存的面具、称号记录和待确认结果吗？其他档案不会受影响。`,
     confirmText: "清空记录",
     onConfirm: () => {
       state.inventory = createEmptyInventory();
@@ -1651,6 +1659,14 @@ function createMaskCard(mask) {
 
   fragment.querySelector(".card-title").textContent = mask.maskName;
   fragment.querySelector(".card-subtitle").textContent = mask.maskId;
+  const cardActions = fragment.querySelector(".card-actions");
+  if (state.inventory.ownedMaskIds.has(mask.maskId)) {
+    cardActions.appendChild(createMaskOwnershipControl(mask, true, false));
+  } else if (isOwnedMask(mask.maskId)) {
+    cardActions.appendChild(createMaskOwnershipControl(mask, true, true));
+  } else {
+    cardActions.appendChild(createMaskOwnershipControl(mask, false, false));
+  }
 
   const aliasLine = fragment.querySelector(".alias-line");
   if (mask.aliases.length) {
@@ -1761,6 +1777,44 @@ function createActivatedChip() {
   return chip;
 }
 
+function createMaskOwnershipControl(mask, isChecked, isReadonly) {
+  const label = document.createElement("label");
+  label.className = [
+    "mask-owned-control",
+    isChecked ? "is-checked" : "",
+    isReadonly ? "is-readonly" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.className = "mask-owned-input";
+  input.dataset.inventoryToggleMaskId = mask.maskId;
+  input.checked = isChecked;
+  input.disabled = isReadonly;
+  input.setAttribute(
+    "aria-label",
+    isReadonly
+      ? `面具“${mask.maskName}”已由称号记录同步到${getInventoryProfileLabel()}`
+      : isChecked
+        ? `面具“${mask.maskName}”已收录，取消勾选可从${getInventoryProfileLabel()}移除`
+        : `将面具“${mask.maskName}”添加到${getInventoryProfileLabel()}`,
+  );
+
+  const text = document.createElement("span");
+  text.className = "mask-owned-label";
+  text.textContent = isChecked ? "已收录" : "收录";
+
+  label.title = isReadonly
+    ? "由已确认称号同步，请在图鉴页管理"
+    : isChecked
+      ? `取消勾选可从${getInventoryProfileLabel()}移除`
+      : `收录到${getInventoryProfileLabel()}`;
+  label.append(input, text);
+  return label;
+}
+
 function createAchievementCard(item) {
   const fragment = elements.achievementTemplate.content.cloneNode(true);
   const title = fragment.querySelector(".card-title");
@@ -1829,12 +1883,85 @@ function isClaimedAchievement(achievementId) {
     return true;
   }
 
-  const appearance = indices.appearancesById.get(achievementId);
-  if (!appearance) {
+  const achievement = indices.achievementsById.get(achievementId);
+  if (!achievement || !achievement.demandIds?.length) {
     return false;
   }
 
-  return false;
+  const ownedMaskIds = getEffectiveOwnedMaskIds();
+  return achievement.demandIds.every((maskId) => ownedMaskIds.has(maskId));
+}
+
+function handleSearchInventoryToggle(event) {
+  const input = event.target.closest("input[data-inventory-toggle-mask-id]");
+  if (!input || input.disabled) {
+    return;
+  }
+
+  const maskId = input.dataset.inventoryToggleMaskId || "";
+  const mask = indices.masksById.get(maskId);
+  if (!mask) {
+    return;
+  }
+
+  const previouslyActive = getEffectiveClaimedAchievementIds();
+  const shouldRemove = !input.checked;
+  if (shouldRemove) {
+    state.inventory.ownedMaskIds.delete(maskId);
+  } else if (isOwnedMask(maskId)) {
+    refreshCurrentResults();
+    return;
+  } else {
+    state.inventory.ownedMaskIds.add(maskId);
+  }
+  writeInventory();
+  const currentActive = getEffectiveClaimedAchievementIds();
+  refreshCurrentResults();
+  if (shouldRemove) {
+    const deactivatedCount = Array.from(previouslyActive).filter(
+      (achievementId) => !currentActive.has(achievementId),
+    ).length;
+    const deactivationText = deactivatedCount
+      ? `，撤销 ${deactivatedCount} 个称号`
+      : "";
+    elements.status.textContent = `已从${getInventoryProfileLabel()}移除面具“${mask.maskName}”${deactivationText}`;
+    return;
+  }
+
+  const newlyActiveCount = Array.from(currentActive).filter(
+    (achievementId) => !previouslyActive.has(achievementId),
+  ).length;
+  const activationText = newlyActiveCount ? `，新激活 ${newlyActiveCount} 个称号` : "";
+  elements.status.textContent = `已将面具“${mask.maskName}”添加到${getInventoryProfileLabel()}${activationText}`;
+}
+
+function getEffectiveOwnedMaskIds() {
+  const ownedMaskIds = new Set(state.inventory.ownedMaskIds);
+  state.inventory.claimedAchievementIds.forEach((achievementId) => {
+    const achievement = indices.achievementsById.get(achievementId);
+    if (achievement?.type === "single") {
+      achievement.demandIds.forEach((maskId) => ownedMaskIds.add(maskId));
+    }
+  });
+  return ownedMaskIds;
+}
+
+function isOwnedMask(maskId) {
+  return getEffectiveOwnedMaskIds().has(maskId);
+}
+
+function getEffectiveClaimedAchievementIds() {
+  const claimedIds = new Set(state.inventory.claimedAchievementIds);
+  const ownedMaskIds = getEffectiveOwnedMaskIds();
+  state.achievements.forEach((achievement) => {
+    if (
+      achievement.demandIds?.length &&
+      achievement.demandIds.every((maskId) => ownedMaskIds.has(maskId))
+    ) {
+      claimedIds.add(achievement.achievementId);
+    }
+  });
+  return claimedIds;
 }
 
 function toggleAchievement(achievementId) {
@@ -5337,9 +5464,10 @@ function clearConfirmedRecords() {
   }
   showConfirmDialog({
     title: "删除全部已确认记录",
-    message: "确定一键删除全部已确认记录吗？待确认结果会保留。",
+    message: "确定删除全部面具和称号记录吗？待确认结果会保留。",
     confirmText: "全部删除",
     onConfirm: () => {
+      state.inventory.ownedMaskIds.clear();
       state.inventory.claimedAchievementIds.clear();
       state.inventory.claimedAchievementTitles.clear();
       state.inventory.lastGameTotal = 0;
@@ -5407,11 +5535,17 @@ function handleManualClick(event) {
 }
 
 function handleConfirmedClick(event) {
-  const button = event.target.closest("[data-confirmed-achievement-id]");
+  const button = event.target.closest(
+    "[data-confirmed-achievement-id], [data-confirmed-mask-id]",
+  );
   if (!button) {
     return;
   }
 
+  const maskId = button.dataset.confirmedMaskId || "";
+  if (maskId) {
+    state.inventory.ownedMaskIds.delete(maskId);
+  }
   const achievementId = button.dataset.confirmedAchievementId || "";
   if (achievementId) {
     state.inventory.claimedAchievementIds.delete(achievementId);
@@ -5435,7 +5569,7 @@ function renderInventory() {
 }
 
 function getScoreTotals() {
-  const claimed = state.inventory.claimedAchievementIds;
+  const claimed = getEffectiveClaimedAchievementIds();
   const maskItems = state.achievements.filter((achievement) =>
     claimed.has(achievement.achievementId),
   );
@@ -5743,7 +5877,7 @@ function renderConfirmedList() {
   if (!records.length) {
     const empty = document.createElement("p");
     empty.className = "subtle-line";
-    empty.textContent = "暂无已确认记录";
+    empty.textContent = "暂无图鉴记录";
     elements.confirmedList.replaceChildren(empty);
     return;
   }
@@ -5753,7 +5887,24 @@ function renderConfirmedList() {
 
 function getConfirmedRecords() {
   const records = [];
-  state.inventory.claimedAchievementIds.forEach((achievementId) => {
+  state.inventory.ownedMaskIds.forEach((maskId) => {
+    const mask = indices.masksById.get(maskId);
+    if (!mask) {
+      return;
+    }
+    records.push({
+      kind: "mask",
+      maskId,
+      item: mask,
+      title: mask.maskName,
+      point: 0,
+      removable: true,
+      order: state.masks.indexOf(mask),
+    });
+  });
+
+  const activeAchievementIds = getEffectiveClaimedAchievementIds();
+  activeAchievementIds.forEach((achievementId) => {
     const achievement =
       indices.achievementsById.get(achievementId) ||
       indices.tokensById.get(achievementId) ||
@@ -5762,16 +5913,21 @@ function getConfirmedRecords() {
       return;
     }
     records.push({
+      kind: "achievement",
       achievementId,
       item: achievement,
       title: getConfirmedRecordTitle(achievement),
       meta: getConfirmedRecordMeta(achievement),
       point: Number(achievement.point) || 0,
-      order: getKnownRowOrder(
-        achievement,
-        records.length,
-        getAchievementGroup(achievement),
-      ),
+      removable: state.inventory.claimedAchievementIds.has(achievementId),
+      autoActivated: !state.inventory.claimedAchievementIds.has(achievementId),
+      order:
+        10000 +
+        getKnownRowOrder(
+          achievement,
+          records.length,
+          getAchievementGroup(achievement),
+        ),
     });
   });
 
@@ -5930,10 +6086,18 @@ function createConfirmedItem(record) {
   text.className = "confirmed-text";
   const title = document.createElement("p");
   title.className = "manual-title";
-  title.textContent = getInventoryListTitleLine(record.item, record.title);
+  title.textContent =
+    record.kind === "mask"
+      ? `${record.item.maskName} · ${record.item.maskId}`
+      : getInventoryListTitleLine(record.item, record.title);
   const meta = document.createElement("p");
   meta.className = "manual-meta";
-  meta.textContent = getAchievementKindText(record.item);
+  meta.textContent =
+    record.kind === "mask"
+      ? "已添加面具"
+      : record.autoActivated
+        ? `${getAchievementKindText(record.item)} · 面具自动激活`
+        : getAchievementKindText(record.item);
   text.append(title, meta);
 
   const side = document.createElement("div");
@@ -5945,14 +6109,18 @@ function createConfirmedItem(record) {
     side.appendChild(score);
   }
 
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "tiny-button";
-  if (record.achievementId) {
-    button.dataset.confirmedAchievementId = record.achievementId;
+  if (record.removable) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tiny-button";
+    if (record.maskId) {
+      button.dataset.confirmedMaskId = record.maskId;
+    } else if (record.achievementId) {
+      button.dataset.confirmedAchievementId = record.achievementId;
+    }
+    button.textContent = "删除";
+    side.appendChild(button);
   }
-  button.textContent = "删除";
-  side.appendChild(button);
 
   top.append(text, side);
   item.appendChild(top);
